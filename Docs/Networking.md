@@ -364,3 +364,33 @@ Step 7で追加した`DominoCleanupManager`は、BUILDING中に倒れたまま�
 - `NetworkObject.Despawn(true)`はHost/Server上で呼ばれた瞬間、NGOの標準的な同期の仕組みによってDespawnメッセージが全Clientへ配信され、Host/Client双方の画面から同じタイミングでDominoが消えます。これはSpawn時の`InstantiateAndSpawn()`と対称的な仕組みです
 
 Spawn(Validationの上でHostが生成)・Despawn(Cleanup判定の上でHostが削除)のどちらも「HostのPCだけが正解を決め、Clientはその結果を一方的に受け取る」という、第8章で説明したHost Authorityの考え方を一貫して守っています。仕組みの詳細・パラメータは`DominoLifecycle.md`を参照してください。
+
+---
+
+## 21. Player Push(Player同士の衝突Push)のAuthority Flow(Step 8A)
+
+PlayerはOwner Authority(第9章)のままですが、「相手Playerを押す」という操作だけは、以下のような**Server-validatedな2段階RPC**で実現しています。Player Movement全体をHost Authorityへ切り替えることはしていません。
+
+```mermaid
+sequenceDiagram
+    participant A as Player A Owner (攻撃側)
+    participant Server as Server (Host)
+    participant B as Player B Owner (対象側)
+
+    Note over A: A自身のRigidbody(Dynamic)がB(Kinematic Replica)へ衝突
+    A->>Server: RequestPushRpc(targetRef=B) [SendTo.Server, InvokePermission=Owner]
+    Note over Server: 自分自身へのPush要求は棄却
+    Note over Server: 対象ペアごとのCooldownを確認(既定0.4秒)
+    Note over Server: A/Bの権威あるTransform位置からdirection/distanceを再計算
+    Note over Server: distanceがmaxValidationDistance(既定2.5m)を超えていれば棄却
+    Server->>B: ApplyPushRpc(direction * pushForce) [SendTo.Owner, InvokePermission=Server]
+    Note over B: 自分自身のDynamic RigidbodyへPush速度を加算(ClampMagnitudeで上限あり)
+```
+
+- **なぜOwner Authorityのまま実現できるか**: `NetworkRigidbody`は非Owner側を自動的にKinematic化するため(第7章)、Client Aのローカル物理シミュレーション上でBは動かせません。そこでPushの**適用**だけは必ずBの本来のOwnerで行い(`[Rpc(SendTo.Owner)]`)、Aの役割は「押した」という事実をServerへ伝えるだけに限定しています。Movementそのものの権威(位置を最終的に確定するのが誰か)は今まで通りBの実際のOwnerです
+- **なぜAが直接Bへ効果を及ぼせないか**: `RequestPushRpc`は`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]`で、必ずServerを経由します。Client Aが任意のClient BへPushを直接及ぼす経路はコード上存在しません
+- **Double Applyの防止**: `RequestPushRpc`送信側(Attacker)は接触検出のたびに`_lastRequestSentTime`で自己Cooldownを持ち、Server側もTargetへの実適用ごとに`_lastPushAppliedTime`でCooldownを持ちます。1回の物理的接触に対して同一方向のPushが二重に適用されることはありません
+- **Per-frame RPC禁止の遵守**: RPCが送信されるのは`OnCollisionEnter`(接触の開始時のみ)で、`OnCollisionStay`は使用していません。接触が継続していても連続でRPCが飛ぶことはありません
+- **Clamp**: Push適用先の`PlayerMotor.ApplyPushRpc()`は水平成分のみを`_pushVelocity`へ加算し(`horizontalVelocity.y = 0`で明示的にYを無視)、`Vector3.ClampMagnitude(..., maxPushSpeed)`で連続Pushによる際限ない加速を防いでいます
+
+詳細な設計判断・パラメータは`PlayerSystem.md`「4.6. Player Collision Stability / Player-vs-Player Push」を参照してください。

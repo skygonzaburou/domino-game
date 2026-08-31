@@ -606,6 +606,34 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 
 ---
 
+## Step 8A: Player Physics Polish
+
+### 実装済み
+
+- `PlayerMotor.cs`の`Rigidbody.constraints`を`FreezeRotationX | FreezeRotationZ`から`FreezeRotationX | FreezeRotationY | FreezeRotationZ`へ変更。Y軸も含めて全軸のPhysics駆動Rotationを禁止し、衝突後にPlayerが勝手に回転し続ける問題を修正。`Rigidbody.MoveRotation()`(Movement Logic側のYaw制御)はこの制約と競合しないことを確認済み(制約はPhysics Solverの衝突・トルク応答のみをブロックし、スクリプトからの明示的なMoveRotationは適用され続ける)
+- `PlayerPushController.cs`(新規)を追加。Owner側の`OnCollisionEnter`(Player相手のみ)を起点に、Server-validatedな2段階RPC(`RequestPushRpc`→`ApplyPushRpc`)でPlayer同士のPushを実現。Owner Authorityは維持したまま、Push適用は常にTarget自身のOwnerで実行
+- `PlayerMotor.cs`に`_pushVelocity`(Push由来の減衰する追加水平速度)を追加し、通常の移動速度へ加算。Start Area Constraint(`ConstrainToStartArea`)は合成後の速度に対して適用されるため、Push単体でStart Area外へ出ることはない
+- `Player.prefab`へ`PlayerPushController`コンポーネントを追加(`pushForce=3.5`, `pushCooldown=0.4`, `maxValidationDistance=2.5`)
+
+### 動作確認済み
+
+- **Collision Spin Test**: `PlayerMotor`を一時的に無効化してPhysicsのみでPlayerをDomino列へ実際に衝突させ(複数のDominoが実際に倒れる=68°前後の傾斜を確認)、その後`angularVelocity=(0,0,0)`・`eulerAngles=(0,0,0)`(完全に直立)を維持することをPlay Modeで確認
+- **Player Push(Host→Client)**: 実際の2人プレイ環境(Host+MPPM Client)で、Host Playerの`PlayerMotor`を一時的に無効化してPhysicsのみでClient Playerの位置へ物理的に衝突させ、本物の`OnCollisionEnter`→`RequestPushRpc`→Server Validation→`ApplyPushRpc`という経路を経て、Client Player(Owner=1)が実際に約0.67m押し出され、その後位置が安定(無限に加速・振動しない)することを確認
+- **Push + Start Area Constraint**: RUNNING中、Start Areaの境界近く(margin込みの実効境界)にPlayerを配置し、境界の外側方向へ意図的に大きな(10 m/s、`maxPushSpeed`のクランプを超える)Pushを適用しても、Playerが境界を超えて押し出されないことを確認
+- **既存機能回帰**: READY判定、Ready Re-arm(FAILED→BUILDING後の退出→再入場サイクル)、Failure Reset(FAILED→BUILDING)が、Player Physics変更後も引き続き正常に動作することを確認。Placement関連ファイルは本Stepを通じて一切変更していない(`git diff --stat`で確認)
+- 検証全体を通じてConsole Errorは0件(1件、意図的な距離超過による`DominoSpawner`の想定内Rejection Warningのみ)
+
+### 未実装/確認できなかった事項
+
+- **Client → Host方向のPush**: Client Playerの`Rigidbody`はOwner Authorityのため、Server(Host)側から直接操作できません。MPPM Client側のウィンドウへの自動Keyboard入力は本セッションでも不安定であることが再確認されたため(Editor Play Modeの`editorInputBehaviorInPlayMode`設定、Step 7.8.1で既出の制約と同根)、Client自身が歩いてHost Playerへ衝突する方向のPushは自動化検証できていません。コード上はHost→Client方向と完全に対称な実装(`PlayerPushController`はOwner側で共通に動作)であり、Host→Client方向の成功はこの対称性を裏付けるものですが、開発者ご自身による実機確認を推奨します
+- **F→RUNNINGの本セッションでの再確認**: `ChallengeInput.cs`はStep 8で一切変更していない(Step 7.8.1で本物の経路を用いて複数回確認済み)ため、Step 8Aの本セッションでも同じ経路が動作することが期待されますが、今回のセッション中はEditor Play ModeのGame Viewフォーカスが不安定で、Simulated Input Systemでの単独再確認はできませんでした。RUNNING状態自体は正規の`BeginRun()`経由で到達し、そこでのPlayer挙動(Push + Constraint等)は確認済みです
+
+### 将来確認が必要な事項
+
+- `pushForce`(既定3.5)・`pushCooldown`(既定0.4秒)・`maxPushSpeed`(既定6)・`pushVelocityDecay`(既定8)はいずれも初期値です。実際に複数人でプレイした際の「押される感覚」次第で調整が必要になる可能性があります
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

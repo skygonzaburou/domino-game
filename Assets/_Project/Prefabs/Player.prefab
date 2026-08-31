@@ -18,6 +18,7 @@ GameObject:
   - component: {fileID: 1258217538256036698}
   - component: {fileID: 532778656812165713}
   - component: {fileID: 462152421959077259}
+  - component: {fileID: 1433634614581476614}
   m_Layer: 9
   m_Name: Player
   m_TagString: Player
@@ -154,6 +155,8 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   cameraTarget: {fileID: 6908575822131438580}
+  maxPushSpeed: 6
+  pushVelocityDecay: 8
 --- !u!114 &720650303308280578
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -232,16 +235,18 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   enterPlacementKey: 19
   cancelKey: 60
+  rotateLeftKey: 15
+  rotateRightKey: 18
   ghostDominoPrefab: {fileID: 4524258262596908532, guid: d638a4bbd680aaa47af7d197dd1d279c, type: 3}
   placementMarkerPrefab: {fileID: 39032853831113805, guid: e3e710f033c1a5648be9311d0692af7b, type: 3}
-  maxPlacementRange: 2.7
+  placementDistance: 1.2
   hoverHeight: 0.15
-  cameraAimRange: 50
   groundRaycastRange: 3
   groundMask:
     serializedVersion: 2
     m_Bits: 4294966527
   dominoRestingHeight: 0.5
+  yawRotationSpeed: 135
 --- !u!114 &462152421959077259
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -256,6 +261,22 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Domino.Player.ChallengeInput
   ShowTopMostFoldoutHeaderGroup: 1
   startChallengeKey: 20
+--- !u!114 &1433634614581476614
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1210256795894551307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 16e8ff330413af64c833a3ddffc698b4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.Player.PlayerPushController
+  ShowTopMostFoldoutHeaderGroup: 1
+  pushForce: 3.5
+  pushCooldown: 0.4
+  maxValidationDistance: 2.5
 --- !u!1 &2210624771682651668
 GameObject:
   m_ObjectHideFlags: 0

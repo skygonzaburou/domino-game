@@ -419,6 +419,51 @@ Camera自体はNetwork同期しません。`GamePhase`は既にNetworkVariable�
 
 ---
 
+## 4.6. Player Collision Stability / Player-vs-Player Push(Step 8A)
+
+### 衝突後に回転し続ける問題の原因と修正
+
+`Awake()`で設定する`Rigidbody.constraints`が、以前は`FreezeRotationX | FreezeRotationZ`のみでY軸(Yaw)を物理エンジンに委ねたままでした。CharacterのYaw自体は`ApplyMovement()`内の`Rigidbody.MoveRotation()`が毎FixedUpdate明示的に設定しているため通常は問題になりませんが、Wall/Domino/他PlayerへPlayerが斜めに衝突すると、その衝突の反作用としてPhysics Solverが独自にY軸まわりの角速度(`angularVelocity.y`)を発生させることがあります。`Rigidbody.angularDamping`は既定0.05と非常に小さいため、この角速度はほとんど減衰せず、Inputが無い間(`MoveRotation()`が呼ばれない間)は物理エンジンがそのまま回転を積分し続け、「衝突後に勝手に回り続ける」という症状になっていました。
+
+```csharp
+// PlayerMotor.Awake()
+_rigidbody.constraints = RigidbodyConstraints.FreezeRotationX
+    | RigidbodyConstraints.FreezeRotationY
+    | RigidbodyConstraints.FreezeRotationZ;
+```
+
+Y軸も含めて全軸のRotationをFreezeすることで、Physics SolverはY軸まわりに一切トルクを適用できなくなります。**`Rigidbody.MoveRotation()`はこの制約と競合しません**: `MoveRotation()`はPhysics Solverの衝突・トルク応答とは別の、スクリプト側からの明示的なKinematicスタイルの回転指定であり、Unityは`RigidbodyConstraints`の影響を受けずにこれを適用します。つまりCharacterのYawは引き続き完全に`PlayerMotor`(Movement Logic)側が管理し、Physics Collisionからは一切書き換えられません。X/Z軸は元々Freeze済みのため、衝突で横転することもありません。
+
+Domino列へ実際に衝突させ、複数のDominoが倒れるほどの接触後もPlayerの`angularVelocity`が`(0,0,0)`のまま、`eulerAngles`も`(0,0,0)`(直立姿勢)を維持することをPlay Modeで確認しています。
+
+### Player同士のPush(`PlayerPushController.cs`)
+
+PlayerはOwner Authorityのため、自分以外のPlayerの`Rigidbody`はローカルでは常にKinematicです(`NetworkRigidbody`が非Owner側を自動でKinematic化する既存の仕組み、Step 2から変更なし)。Kinematic Rigidbody同士は通常の物理衝突では押し出されないため、素のPhysicsだけではPlayer同士が自然に押し合うことはできません。これがRoot Causeであることを確認した上で、最小限のServer-validated Push RPCを追加しました。
+
+```mermaid
+sequenceDiagram
+    participant A as Player A (Attacker, Owner)
+    participant S as Server (Host)
+    participant B as Player B (Target, Owner)
+
+    A->>A: OnCollisionEnter(Player B) ※IsOwnerのみ処理
+    A->>S: RequestPushRpc(targetRef=B) [SendTo.Server, Owner限定]
+    S->>S: targetがA自身でないか確認
+    S->>S: Cooldown確認(ペアごとpushCooldown秒)
+    S->>S: A/Bの現在位置からdirection/distanceを再計算(Client申告値は使わない)
+    S->>S: distance > maxValidationDistanceなら棄却
+    S->>B: ApplyPushRpc(direction * pushForce) [SendTo.Owner, Server限定]
+    B->>B: _pushVelocityへ加算(ClampMagnitudeでmaxPushSpeed以内)
+```
+
+- **Owner Authority維持**: Player Movement全体をHost Authorityへ変更していません。Push適用先(`ApplyPushRpc`)は常にTarget自身のOwner Clientで実行され、そのOwnerが本来持つDynamic Rigidbodyへ作用します。
+- **Double Push防止**: `OnCollisionEnter`は接触開始時にしか発火しないため、A→Bの1回の接触につき通常はRequestが1回しか送られません。加えてServer側で対象ペアごとの`pushCooldown`(既定0.4秒)を設けており、接触が瞬間的に途切れて再接触するような稀なケースでも連打されません。A→BとB→A(双方が独立にOnCollisionEnterを検出して送るリクエスト)はそれぞれ別方向のPushであり、意図した"Mutual Push"です。
+- **Push Force/Speed**: `pushForce`(既定3.5 m/s、`PlayerPushController`)がServer側でTargetへ送る速度の大きさ、`maxPushSpeed`(既定6 m/s、`PlayerMotor`)が連続Pushでも際限なく加速しないための上限、`pushVelocityDecay`(既定8 m/s²、`PlayerMotor`)が押された後に自然な移動へ戻る速さです。いずれもInspectorから調整可能です。
+- **Start Area Constraintとの合成**: `_pushVelocity`は`ApplyMovement()`内で`targetVelocity = direction * speed + _pushVelocity`として通常の移動速度に加算され、その**後**で`ConstrainToStartArea()`によるクランプが適用されます。そのためRUNNING中にPushされても、クランプ後の速度がStart Areaの境界を越えることはありません(Pushだけを迂回する特別扱いはしていません)。
+- **Validation**: `maxValidationDistance`(既定2.5m)を超える申告はServer側で棄却し、明らかに離れた相手への不正なPush要求を防ぎます。方向・距離は常にServer側で権威あるTransform位置から再計算しており、Client側から送られた値をそのまま信用することはありません。
+
+---
+
 ## 5. Local PlayerとRemote Playerで処理がどう違うか
 
 同じ `Player.prefab` から生成されたオブジェクトでも、「自分のキャラクター(Local/Owner)」か「他人のキャラクター(Remote)」かによって、実際に動くコードとRigidbodyの状態がまったく異なります。
