@@ -1,6 +1,6 @@
 # ImplementationStatus(実装状況の整理)
 
-Step 0〜Step 6について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
+Step 0〜Step 6.1について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
 
 ---
 
@@ -221,6 +221,43 @@ Host自身のPlayerでの操作をNew Input Systemの`QueueStateEvent`でシミ�
 - **バグ修正の記録**: 検証中、Play Modeを終了(Stop)する瞬間に、破棄されつつあるDominoのColliderが最後のTrigger Enter/Stay/Exitイベントを発生させ、その時点で既に`NetworkManager.Singleton`が`null`になっているために`NullReferenceException`が発生する不具合を発見しました。`DominoFallenZone.CheckDomino()`の先頭に`NetworkManager.Singleton == null`のガードを追加して修正済みです。今後、Play Mode終了直前に何らかの処理が走るコードを追加する際は、同様の「Singletonがnullになるタイミング」に注意してください
 - Checkpointの`Fallen Angle Threshold`(既定60°)は、Domino Width変更後の重心・接触ジオメトリの変化を踏まえた再検証は簡易的なものに留まっています。Stageのレイアウトによっては調整が必要になる可能性があります
 - READY判定は「Start Areaの範囲内にいるかどうか」のみで行っており、Playerがジャンプ中/落下中などでも範囲内なら即座にReadyとして扱われます。ゲームデザイン上の意図的な仕様か、将来調整すべき点かは要検討です
+
+---
+
+## Step 6.1: Placement Marker UX改善(Live Preview化)
+
+Step 6.1では、Step 6で実装したGameFlow判定(BUILDING/READY/RUNNING/SUCCESS、Zone判定、Checkpoint順序判定等)、Domino Physics、Network Authority、DominoSpawner、Stage Authoring構成には一切変更を加えていません。変更したのはPlacement Markerの表示タイミングのみです。
+
+### 実装済み
+
+- `PlacementMarker.cs`を変更: `MarkerState`(`Preview`/`Locked`)enumを追加し、`SetState()`でMaterialの不透明度(`previewOpacity=0.2` / `lockedOpacity=0.45`)を切り替えられるようにしました。1つの`Material`インスタンスを`Awake()`でキャッシュし、Preview用・Locked用に別Prefabを作る必要がない構成にしています
+- `PlacementController.cs`を変更: `_markerLocked`(bool)フィールドを新設し、Marker/Placementの状態を「BUILDING中・Placement Mode外・未Lock」の間は**毎フレーム**`ComputeGroundAnchor()`→`ShowMarker(Preview)`を呼ぶLive Preview方式に変更しました。右クリックで現在のPreview位置へLock(`ShowMarker(Locked)`)、再度右クリックすれば現在位置へ再Lock、`E`キー押下時に未Lockであればその場でLockしてからPlacement Modeへ入るようにしています。確定・キャンセル後は`_markerLocked`を`false`にリセットし、BUILDINGのままであれば次フレームから自動的にLive Previewが再開します
+- 旧`UpdateMarker()`メソッドは`ShowMarker(MarkerState)`に統合・置き換えました
+
+### 動作確認済み
+
+Host自身のPlayerでの操作をNew Input Systemの`QueueStateEvent`でシミュレートし、Unity Editor上のPlay Modeで確認しました。
+
+- **自動表示**: 右クリックしなくても、BUILDING中は薄いPreview状態のMarkerが自動的に表示されることを確認(材質のAlpha値が`previewOpacity=0.2`であることも直接確認)
+- **移動追従**: Playerを離れた位置へテレポートすると、Marker位置がPlayerの新しい前方位置へ正しく追従することを確認(数値上、Player位置+forwardDistanceと完全一致)
+- **回転追従**: Playerの向きを変えると、Marker位置もその新しい前方方向へ移ることを確認
+- **Lock**: 右クリックでMarkerが現在の位置に固定され(材質Alpha値が`lockedOpacity=0.45`に変化)、その後Playerを大きく移動させてもMarker位置が動かないことを確認
+- **Re-Lock**: Lock済みの状態でもう一度右クリックすると、その時点の新しいPlayer位置へMarkerが再配置されることを確認
+- **Eのみでの配置**: 右クリックせず`E`だけを押した場合も、その瞬間のPreview位置がそのままLockされ、Ghostがその位置に正しく表示されることを確認(数値上、Marker/Ghostの X/Z が完全一致)
+- **確定後の位置一致**: 確定したReal DominoのX/Z座標が、Lock時点のMarker/Ghostの座標と一致することを確認
+- **Escapeキャンセル**: キャンセル後、Ghost・Markerともに非表示になり、`_isPlacing`が`false`に戻ることを確認
+- **Live Previewの再開**: 確定・キャンセルいずれの場合も、BUILDINGが継続していれば直後にMarkerがPreview状態で再表示されることを確認
+- **Phase変化での非表示**: READYへ遷移した瞬間、Markerが非表示になることを確認。BUILDINGへ戻ると自動的にLive Previewが再開することを確認
+- Console: Project由来のError/Warningが0件であることを確認
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作によるLive Preview追従の直接確認**: Step 4〜6から持ち越しの制約(MPPM仮想Playerウィンドウへのキーボード入力自動送信不可)により、Client自身が実際に歩いてPreview Markerが追従する様子は自動テストできていません。コード上はHost自身のPlayerと全く同じ`IsOwner`ガードのローカル処理であり、`PlacementMarker`/`PlacementController`ともに`NetworkObject`を持たないため、対称的に同じ挙動になるはずです
+
+### 将来確認が必要な事項
+
+- Live Previewは毎フレームRaycastを1回実行します。現状Player 1人あたりの軽量な処理であり問題ありませんが、将来的にPlayer数が増えた場合(4人想定)は、4人分×毎フレームのRaycastが同時に発生することになります。現時点では許容範囲と考えていますが、将来的なパフォーマンス計測の対象として記録しておきます
+- 「倒れていさえすればClear判定へ利用される」現在のGameFlow判定の限界(Chain Provenance判定が無いこと)は、ユーザー様のご指示どおり今回は変更していません。別Stepでの改善が予定されています
 
 ---
 

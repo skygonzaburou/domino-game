@@ -2,13 +2,26 @@ using UnityEngine;
 
 namespace Domino.Player
 {
+    public enum MarkerState
+    {
+        Preview,
+        Locked
+    }
+
     public class PlacementMarker : MonoBehaviour
     {
+        [Header("Size")]
         [SerializeField] private float size = 0.6f;
-        [SerializeField, Range(0f, 1f)] private float opacity = 0.35f;
         [SerializeField] private float groundOffset = 0.02f;
 
+        [Header("Opacity")]
+        [SerializeField, Range(0f, 1f)] private float previewOpacity = 0.2f;
+        [SerializeField, Range(0f, 1f)] private float lockedOpacity = 0.45f;
+
         public float GroundOffset => groundOffset;
+
+        private Material _material;
+        private MarkerState _state = MarkerState.Preview;
 
         private void Awake()
         {
@@ -20,11 +33,26 @@ namespace Domino.Player
             var meshRenderer = GetComponent<MeshRenderer>();
             if (meshRenderer != null)
             {
-                Material mat = meshRenderer.material;
-                Color c = mat.color;
-                c.a = opacity;
-                mat.color = c;
+                _material = meshRenderer.material;
             }
+
+            ApplyOpacity();
+        }
+
+        public void SetState(MarkerState state)
+        {
+            if (_state == state) return;
+            _state = state;
+            ApplyOpacity();
+        }
+
+        private void ApplyOpacity()
+        {
+            if (_material == null) return;
+            float opacity = _state == MarkerState.Locked ? lockedOpacity : previewOpacity;
+            Color c = _material.color;
+            c.a = opacity;
+            _material.color = c;
         }
     }
 }

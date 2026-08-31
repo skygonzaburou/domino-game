@@ -29,8 +29,10 @@ namespace Domino.Player
         private GameObject _ghostInstance;
         private GhostDomino _ghostDomino;
         private GameObject _markerInstance;
+        private PlacementMarker _placementMarker;
         private bool _isPlacing;
         private bool _markerActive;
+        private bool _markerLocked;
 
         // Single source of truth for where a Domino would go: computed once by
         // UpdateMarker()/EnterPlacementMode(), then reused as-is by the Marker, the
@@ -62,15 +64,28 @@ namespace Domino.Player
             {
                 if (_isPlacing) CancelPlacement();
                 else if (_markerActive) HideMarker();
+                _markerLocked = false;
                 return;
             }
 
             if (!_isPlacing)
             {
+                // Live Preview: as long as the marker isn't locked, it continuously
+                // follows the player's current placement candidate every frame.
+                if (!_markerLocked)
+                {
+                    ComputeGroundAnchor();
+                    ShowMarker(MarkerState.Preview);
+                }
+
                 var mouse = Mouse.current;
                 if (mouse != null && mouse.rightButton.wasPressedThisFrame)
                 {
-                    UpdateMarker();
+                    // Always recompute so a second Right Click re-locks to the
+                    // current live position rather than the old locked one.
+                    ComputeGroundAnchor();
+                    _markerLocked = true;
+                    ShowMarker(MarkerState.Locked);
                 }
 
                 if (Keyboard.current != null && Keyboard.current[enterPlacementKey].wasPressedThisFrame)
@@ -114,21 +129,21 @@ namespace Domino.Player
             _anchorGroundNormal = groundNormal;
         }
 
-        private void UpdateMarker()
+        private void ShowMarker(MarkerState state)
         {
-            ComputeGroundAnchor();
-
             EnsureMarkerInstance();
             Quaternion slopeAlign = Quaternion.FromToRotation(Vector3.up, _anchorGroundNormal);
             _markerInstance.transform.SetPositionAndRotation(_anchorGroundPosition, slopeAlign * _anchorFlatRotation);
             _markerInstance.SetActive(true);
             _markerActive = true;
+            if (_placementMarker != null) _placementMarker.SetState(state);
         }
 
         private void EnsureMarkerInstance()
         {
             if (_markerInstance != null) return;
             _markerInstance = Instantiate(placementMarkerPrefab);
+            _placementMarker = _markerInstance.GetComponent<PlacementMarker>();
             _markerInstance.SetActive(false);
         }
 
@@ -140,9 +155,12 @@ namespace Domino.Player
 
         private void EnterPlacementMode()
         {
-            if (!_markerActive)
+            if (!_markerLocked)
             {
-                ComputeGroundAnchor();
+                // Bare E with no prior Right Click: lock to whatever the Live
+                // Preview was showing this frame (already computed above).
+                _markerLocked = true;
+                ShowMarker(MarkerState.Locked);
             }
 
             _isPlacing = true;
@@ -204,6 +222,9 @@ namespace Domino.Player
                 _ghostInstance.SetActive(false);
             }
             HideMarker();
+            // Unlock so, if still BUILDING, next frame's Update() immediately
+            // resumes the Live Preview following the player again.
+            _markerLocked = false;
             _motor.SetMovementEnabled(true);
 
             if (ThirdPersonCamera.Instance != null)
