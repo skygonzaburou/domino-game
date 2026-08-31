@@ -352,3 +352,15 @@ Hostは、Clientから送られてきたPosition/Rotationを無条件には信�
 3. **距離確認**: 配置しようとしている位置が、その送信者自身のPlayerの現在位置から`maxPlacementDistance`(既定3m、Inspectorで調整可能)以内であること。Ghostは通常Player前方1.2m程度に表示されるため、3mは通信遅延等のマージンを見込んだ値です
 
 これはあくまでMVP水準のValidationであり、本格的なAnti-Cheatではありません(GameDesign.mdの将来仕様にも本格的なAnti-Cheatは含まれていません)。あくまで「明らかにおかしい要求を弾く」ことが目的です。
+
+---
+
+## 20. Domino DespawnもHost/Server専用(Step 7)
+
+Step 7で追加した`DominoCleanupManager`は、BUILDING中に倒れたまま一定時間経過したDominoを`NetworkObject.Despawn(true)`で削除します。Spawn(第17〜19章)と対になる「Despawn」の権威も、Spawnと同じく**常にHost/Serverだけが行います**。
+
+- `DominoCleanupManager`は`NetworkBehaviour`ではなく通常の`MonoBehaviour`ですが、`Update()`の先頭で`NetworkManager.Singleton.IsServer`を確認するガードを持ち、Host以外では判定・削除処理そのものが実行されません(`DominoSpawner`と同じパターン)
+- Client上にも`DominoCleanupManager`のインスタンス自体は存在します(Scene内の`NetworkManager` GameObjectがHost/Client共通で持つコンポーネントのため)が、上記ガードにより**Client側では常に何もしない**状態になります。Client独自のCleanup Timerは存在しません
+- `NetworkObject.Despawn(true)`はHost/Server上で呼ばれた瞬間、NGOの標準的な同期の仕組みによってDespawnメッセージが全Clientへ配信され、Host/Client双方の画面から同じタイミングでDominoが消えます。これはSpawn時の`InstantiateAndSpawn()`と対称的な仕組みです
+
+Spawn(Validationの上でHostが生成)・Despawn(Cleanup判定の上でHostが削除)のどちらも「HostのPCだけが正解を決め、Clientはその結果を一方的に受け取る」という、第8章で説明したHost Authorityの考え方を一貫して守っています。仕組みの詳細・パラメータは`DominoLifecycle.md`を参照してください。

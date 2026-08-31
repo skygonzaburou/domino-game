@@ -41,12 +41,17 @@ namespace Domino.DominoSystem
                 return false;
             }
 
-            NetworkObject.InstantiateAndSpawn(
+            NetworkObject spawned = NetworkObject.InstantiateAndSpawn(
                 dominoPrefab,
                 NetworkManager.Singleton,
                 ownerClientId: NetworkManager.ServerClientId,
                 position: position,
                 rotation: rotation);
+
+            if (DominoCleanupManager.Instance != null)
+            {
+                DominoCleanupManager.Instance.Register(spawned);
+            }
 
             return true;
         }

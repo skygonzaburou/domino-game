@@ -152,6 +152,8 @@ public void OnZoneStateChanged()
 
 この「まとめて追いつく」設計により、Start/Checkpoint/Goal AreaのZoneはお互いの状態を意識する必要がなく、それぞれが「自分の中のDominoが倒れたかどうか」だけを見ればよいシンプルな実装になっています。
 
+> **既知の課題(Known Issue) / 将来の改善予定**: 上記の「まとめて追いつく」動作は、裏を返すと「対象Zone内のDominoが(本来の正しい順序を無視して)先に倒れてしまっていた場合でも、あとから前段の条件が揃った時点でProgressが認めてしまう」というClear判定の緩さでもあります。現状は`IsSatisfied`(倒れたかどうか)のみを見ており、「本当にChain Reactionの流れの中で倒れたのか」「どのDominoが原因で倒れたのか(Chain Provenance)」までは判定していません。この点はユーザー様も認識済みの既知の限界であり、Step 7時点では**意図的に変更していません**。将来のStepで、Chain Provenance判定やより厳密なClear条件の導入を検討する予定です。
+
 ---
 
 ## 6. Player Ready判定(Start Area)

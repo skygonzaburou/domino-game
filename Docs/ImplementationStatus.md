@@ -261,6 +261,63 @@ Host自身のPlayerでの操作をNew Input Systemの`QueueStateEvent`でシミ�
 
 ---
 
+## Step 7: Fallen Domino Cleanup / Domino Lifecycle
+
+Step 7では、BUILDING中に(誤操作等で)倒れたDominoを一定時間後に自動的にNetwork Despawnし、Playerが同じ場所に置き直せるようにする仕組みを追加しました。既存のGame Flow / Clear Judgement(Step 6で実装したBUILDING/READY/RUNNING/SUCCESS判定、Zone判定、Checkpoint順序判定、いわゆる「まとめて追いつく」仕様含む)、Domino Physics、Network Authority(Port 7778、Host-Authoritative Domino、Owner Authority Player)、Placement Marker/Ghost/Validationには一切変更を加えていません。ユーザー様からの明示的なご指示により、Clear Judgementの緩さ(`GameFlow.md`参照)は今回のStepでは意図的に手を付けていません。
+
+### 実装済み
+
+- `DominoCleanupManager.cs`(新規, `Domino.DominoSystem`名前空間, 通常の`MonoBehaviour`)を作成し、Scene内の`NetworkManager` GameObjectに追加(`NetworkBootstrap`/`DominoSpawner`と同じGameObject)。以下の3つのInspector調整可能パラメータを持ちます
+  - `Fallen Angle Threshold`(既定60°): `Vector3.Angle(domino.transform.up, Vector3.up)`がこの値以上で「倒れた」と判定。GameFlow側の判定(Checkpointの`Fallen Angle Threshold`)とは独立した別設定で、同じ60°から出発していますが将来別々に調整可能です
+  - `Cleanup Delay`(既定3秒): 倒れた状態がこの秒数連続したら削除。**連続**である点が重要で、削除条件を満たす前に起き上がる(角度が閾値未満に戻る)と即座にタイマーをリセットします(一時停止ではなく完全なリセット)
+  - `Check Interval`(既定0.2秒): 登録済みDominoの状態確認を行う間隔。毎フレームではなくこの間隔でまとめて確認することで、Domino1個ごとの重い`Update()`処理を避けています
+- **登録方式**: `DominoCleanupManager`は`FindObjectsByType`等によるScene全体の検索を一切行いません。代わりに`DominoSpawner.TryPlaceDomino()`が`NetworkObject.InstantiateAndSpawn()`直後に`DominoCleanupManager.Instance.Register(spawned)`を明示的に呼び出す方式です。これにより、Step 3の`DominoLine`配下にScene配置されている20個のテスト用Dominoは(`DominoSpawner`経由でSpawnされたものではないため)自動的にCleanup対象から除外されます
+- **Phase連動**: `Update()`内で`GameFlowManager.Instance.CurrentPhase == GamePhase.BUILDING`のときのみ「倒れたかどうか」の判定・タイマー進行を行います。BUILDING以外(READY/RUNNING/SUCCESS)の間は、登録済み全Dominoの`FallenSince`(倒れ始めた時刻)を`-1`(未倒壊扱い)にリセットし続けるだけで、削除は一切行いません。BUILDINGに戻った時点で、まだ倒れていれば0秒からCleanup Delayの計測が再開されます
+- **Host専用ガード**: `DominoCleanupManager`は`NetworkBehaviour`ではなく通常の`MonoBehaviour`のため、`Update()`冒頭で`NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer`を確認し、Host以外では一切動作しません(Step 6の`DominoSpawner`と同じガードパターン)。Despawn(`NetworkObject.Despawn(true)`)はHost/Server上でのみ呼ばれ、Clientは独自のCleanup判定を一切行いません(Clientでも`DominoCleanupManager`インスタンス自体は存在しますが、上記ガードにより`Update()`の実処理が最初の行で必ず`return`します)
+- **GameFlowとの責務分離**: `DominoCleanupManager`は`GamePhase`/`StartTriggered`/`CheckpointProgress`のいずれも一切読み書きしません(読み取るのは`GameFlowManager.Instance.CurrentPhase`のみ)。逆に`GameFlowManager`側にもCleanup関連のコードは一切追加していません
+- **失効した参照の自動除去**: 毎回の`Update()`スキャン時に、`NetworkObject == null || !NetworkObject.IsSpawned`のエントリを追跡リストから取り除きます。何らかの理由でDominoが他の経路でDespawn/破棄された場合でも、参照が残り続けることはありません
+- `DominoSpawner.cs`を変更: `TryPlaceDomino()`が`InstantiateAndSpawn()`の戻り値(`NetworkObject`)を受け取り、`DominoCleanupManager.Instance.Register()`へ渡すよう変更(Cleanup非導入時と比べてValidationロジック自体には変更なし)
+
+### 動作確認済み
+
+Host自身のPlayerでの操作、および`DominoSpawner.TryPlaceDomino()`の直接呼び出し(Step 5から続く確立済みの代理検証手法)を組み合わせ、Unity Editor上のPlay Modeで確認しました。
+
+- **単体の倒れたDomino**: 傾斜配置で完全に倒れたDominoが、Cleanup Delay(検証時は数秒〜数百秒へInspector値を一時的に変更し、余裕を持って確認)経過後に正しくNetwork Despawnされ、Host/Client双方のScene(`NetworkObject`一覧)から消えることを確認
+- **起立したDominoは削除されない**: 垂直配置で起立したままのDominoが、Cleanup Delayを大きく超える時間が経過しても削除されないことを確認
+- **一時的な傾き(Reset挙動)**: `Rigidbody.rotation`を直接操作してDominoを70°→75°まで傾け、Cleanup Delayが満了する前に40°(閾値未満)まで戻すと、`FallenSince`が`-1`(未倒壊)にリセットされ、その後再度倒しても0秒から改めてカウントが始まることを確認(一時停止ではなく完全リセットであることを`FallenSince`の値を直接読んで確認)
+- **複数Dominoの連鎖倒壊**: 複数のDominoを近接配置してChain Reactionを起こし、各Dominoが(同一フレームである必要はなく)それぞれ自分自身の`FallenSince`に基づいて個別にCleanupされることを確認。20個規模のPerformanceテスト(下記)でも同様の挙動を確認
+- **BUILDING → READY(保留)**: BUILDING中に倒したDominoのタイマーが進行中の状態でREADYへ遷移させると、削除が行われないことを確認(`FallenSince`が`-1`にリセットされる実装のため、"保留中に削除される"事態が構造的に起こり得ないことをコード・実行結果の両方で確認)
+- **READY → BUILDING(再開)**: 上記の状態からBUILDINGへ戻すと、Dominoが依然として倒れていれば0秒からCleanup Delayの計測が再スタートすることを確認
+- **RUNNING中は完全に無効**: RUNNING中、Start→Checkpoint 1→Checkpoint 2→Goalの一連の流れで複数のDominoが倒れた状態でも、Cleanupによる削除が一切発生しないこと、かつGameFlow自身の`StartTriggered`/`CheckpointProgress`判定がCleanup導入前と同様に正しく動作し続けることを確認
+- **SUCCESS中も無効**: SUCCESS到達後も同様にCleanupが発生しないことを確認
+- **Cleanup後の再配置**: Cleanupで削除されたDominoと同じ座標へ、実際のE→左クリックのPlacement UIフロー(Input Systemの`QueueStateEvent`による模擬入力)を通じて新しいDominoを問題なく再配置できることを確認。この検証の過程で、複数の異なるテスト実施上の落とし穴(下記「テスト手法上の教訓」参照)を発見・整理しました
+- **Multiplayer(Host + Client接続)**: `NetworkManager.ConnectedClients.Count == 2`(Host + Client)の状態でCleanupが正しく機能することを確認。Cleanup自体はHost専用ガードにより構造的にHost上でのみ実行され、Client側で独自のCleanup Timerが走ることはありません(コード上の`IsServer`ガードにより保証されるため、Client側の内部状態を直接検証する必要はないと判断しました)
+- **Performance(20 Domino)**: 20個のDominoを直接Spawnし(半数を起立、半数を閾値超えの傾きで配置)、密接配置による物理連鎖も発生させた上で、過剰なログ出力やDomino単位のRPCが一切発生しないこと(`DominoCleanupManager`のコード自体にRPCが存在しないため構造的に保証)、Consoleにエラー・想定外のWarningが出力されないことを確認
+- Console: Step 7の実装コード(`DominoCleanupManager`/`DominoSpawner`関連)由来のError/Warningは0件(デバッグ用に一時追加した`Debug.Log`は検証完了後に削除済み)
+
+### テスト手法上の教訓(今回発見・対処した誤検知の原因)
+
+検証の過程で、Domino配置後にDominoがSpawnされず、Consoleにも何のログも出ないように見える事象が複数回発生しましたが、詳しく調査した結果、いずれも**実装のバグではなく、テスト手法側の問題**であることが判明しました。今後の自動検証のために記録しておきます。
+
+1. **`FindFirstObjectByType<PlacementController>()`が意図しない方のPlayerを返すことがある**: Host + Client接続時、Scene内には`PlacementController`インスタンスが2つ存在し(自分の分＋相手の分)、非OwnerのインスタンスはStep 4時点の設計通り`OnNetworkSpawn()`で`enabled = false`にされています。`FindFirstObjectByType`はどちらを返すか保証されないため、無効化されている側を掴んでしまうと、入力をいくら送っても何も起こりません。`IsOwner == true`の個体を明示的に選別する必要があります
+2. **`EditorApplication.isPaused`が意図せず`true`になっていた**: 長時間の自動検証中に何らかの操作でPlay ModeがPauseされ、`Time.frameCount`が完全に停止していたことがありました。Pause中は`Update()`が呼ばれないため、キー入力を送っても一切反応しません。`Application.isPlaying`だけでなく`EditorApplication.isPaused`も確認する必要があります
+3. **Stage範囲外の座標でのテスト**: Ground/Stageの実際の範囲を超えた座標でテスト用に直接配置すると、Dominoが正常にSpawnした直後に何らかの理由で消失する(範囲外での物理的な不整合等)ことがありました。実際のPlacement UIから離れた極端な座標は避け、Stage内の座標で検証することを推奨します
+
+これらはいずれも自動テストの実施方法に起因するものであり、`PlacementController`/`DominoSpawner`/`DominoCleanupManager`本体のロジックには問題がないことを、上記1〜3を踏まえた再検証(Cleanup Delayを一時的に長く設定した上での、正規のRPC経路を通した配置)で確認しています。
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作による直接確認**: Step 4から持ち越しの制約(MPPM仮想Playerウィンドウへのキーボード入力自動送信不可)により、Client自身が実際にEキー→クリックでDomino配置し、それがCleanup対象になる様子を自動テストできていません。コード上、Cleanup対象になるかどうかはSpawn経路(`DominoSpawner`経由かどうか)のみに依存し、誰が配置したか(Host/Client)には依存しないため、Host自身の配置での確認結果がClient配置にも同様に当てはまるはずです
+- Object Poolingは今回導入していません(ユーザー様のご指示通り、まず通常のNetwork Spawn/Despawn Lifecycleの動作確認を優先しました)
+
+### 将来確認が必要な事項
+
+- **Clear Judgementの「まとめて追いつく」既知の課題**: `GameFlow.md`の第5章に記録した通り、Step 7では意図的に変更していません
+- 大量(数百個規模)のDominoを扱うようになった場合、Object Poolingの導入や、Step 5から持ち越しのUnityTransport受信キューサイズ(既定128)の見直しが必要になる可能性があります(いずれも今回のStepの対象外)
+- `Fallen Angle Threshold`/`Cleanup Delay`/`Check Interval`はいずれもStageごとの調整余地があります。今回は既定値(60°/3秒/0.2秒)のみで検証しました
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

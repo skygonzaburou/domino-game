@@ -23,7 +23,8 @@ Assets/
 │  │  │  └─ Network/              … (空フォルダ。現状ネットワーク処理はPlayerMotorに同居)
 │  │  ├─ Domino/
 │  │  │  ├─ GhostDomino.cs        … Step 4で追加
-│  │  │  └─ DominoSpawner.cs      … Step 5で追加(Host専用のValidation・Spawn処理)
+│  │  │  ├─ DominoSpawner.cs      … Step 5で追加(Host専用のValidation・Spawn処理)。Step 7でCleanup登録処理を追加
+│  │  │  └─ DominoCleanupManager.cs … Step 7で追加(Host専用。BUILDING中に倒れたDominoを一定時間後にNetwork Despawn)
 │  │  ├─ GameFlow/                … Step 6で追加
 │  │  │  ├─ GamePhase.cs
 │  │  │  ├─ GameFlowManager.cs
@@ -97,7 +98,7 @@ Scene内のRoot GameObjectは次の8つです。
 | **Main Camera** | Camera, AudioListener, `ThirdPersonCamera` | 三人称カメラ本体。Scene起動時から常に存在する |
 | **Ground** | MeshFilter/MeshRenderer(Plane), MeshCollider | 30m×30mの床(Planeプリミティブをscale(3,1,3)で拡大)。MeshColliderには`GroundPhysicsMaterial`を設定 |
 | **Directional Light** | Light | Universal 3Dテンプレート標準のライト |
-| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap`, `DominoSpawner` | オンライン通信の起点となるオブジェクト |
+| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap`, `DominoSpawner`, `DominoCleanupManager`(Step 7) | オンライン通信の起点となるオブジェクト |
 | **Global Volume** | Volume | URPのポストプロセス設定(テンプレート標準) |
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
 | **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
@@ -117,13 +118,14 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 `ThirdPersonCamera` コンポーネントが付いており、初期値は `distance=4, pitchMin=-30, pitchMax=60, sensitivity=2, lockCursor=true` です。起動直後はまだ誰も追従対象になっていませんが、Playerがスポーンすると自動的にそのPlayerを追うようになります(詳細はPlayerSystem.md)。
 
 ### NetworkManager
-4つのコンポーネントが同じGameObjectに載っています。
+5つのコンポーネントが同じGameObjectに載っています。
 - `NetworkManager`: Netcode for GameObjects本体の管理者
 - `UnityTransport`: 実際の通信を行う部品(接続先 `127.0.0.1:7778`)
 - `NetworkBootstrap`: 誰がHostで誰がClientかを判断して自動的に起動処理を行う自作スクリプト
 - `DominoSpawner`(Step 5で追加): Host上でのみ、Domino配置要求の検証とSpawnを行う自作スクリプト。`NetworkBehaviour`ではなく普通の`MonoBehaviour`で、`PlacementController`からのRPCを受けて呼び出される
+- `DominoCleanupManager`(Step 7で追加): Host上でのみ、BUILDING中に倒れたまま一定時間経過したDominoをNetwork Despawnする自作スクリプト。`DominoSpawner`と同じく普通の`MonoBehaviour`で、`DominoSpawner`がSpawn直後に明示的に`Register()`したDominoだけを追跡する
 
-この4つの関係は Networking.md で詳しく説明しています。
+この5つの関係は Networking.md で詳しく説明しています。
 
 ### GameFlowManager(Step 6)
 `NetworkObject`と`GameFlowManager`の2つが載っています。`NetworkManager`とは別のGameObjectで、Scene読み込み時から存在する「Scene-placed NetworkObject」です(Playerのように接続の都度動的生成されるのではありません)。`GamePhase`・Checkpoint進捗などを`NetworkVariable`で全Clientへ同期する司令塔で、詳細はGameFlow.mdを参照してください。
@@ -138,7 +140,8 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用) |
 | [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更 |
 | [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント |
-| [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする |
+| [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする。Step 7でSpawn直後の`DominoCleanupManager.Register()`呼び出しを追加 |
+| [DominoCleanupManager.cs](../Assets/_Project/Scripts/Domino/DominoCleanupManager.cs) | `Domino.DominoSystem.DominoCleanupManager` | `MonoBehaviour` | Step 7で追加。Host上でのみ、BUILDING中に倒れたまま`Cleanup Delay`秒経過したDominoを`NetworkObject.Despawn()`する。`DominoSpawner`が登録したDominoのみを一定間隔(`Check Interval`)でまとめて確認する(Domino単位の重い`Update()`は持たない) |
 | [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加 |
 | [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
 | [PlacementMarker.cs](../Assets/_Project/Scripts/Player/Placement/PlacementMarker.cs) | `Domino.Player.PlacementMarker` | `MonoBehaviour` | Step 6で追加。床に表示するPlacement Markerの見た目(サイズ・不透明度)のみを扱う、完全ローカルの表示専用コンポーネント |
@@ -262,7 +265,9 @@ graph TD
 
     RPC -->|Server上でのみ実行される| DS[DominoSpawner (NetworkManager上, Hostのみ)]
     DS -->|Validation通過後にInstantiateAndSpawn| DP[Domino.prefab]
+    DS -->|Spawn直後にRegister (Step 7)| DCM[DominoCleanupManager (NetworkManager上, Hostのみ)]
     DP -->|Server Authority, Host上でDynamic/Client上でKinematic| DPRB[Domino Rigidbody]
+    DCM -->|BUILDING中、倒れて Cleanup Delay 経過したらDespawn| DP
 
     TPC -->|Main Cameraに付与, シングルトン| MC[Main Camera]
 ```
@@ -273,3 +278,4 @@ graph TD
 2. **`NetworkTransform` と `NetworkRigidbody` はコードから直接呼び出されることはなく、Netcode for GameObjectsの内部処理が自動的に働きます。** `PlayerMotor` は普通にRigidbodyを動かしているだけで、「ネットワークに送信する」という処理を自分で書く必要はありません。Domino側も同様です。
 3. **`NetworkBootstrap` はScene内の唯一の「ネットワークの起動(StartHost/StartClient)の入口」です。** 一方、`PlacementController`のRPCは「起動後の、個々のゲームプレイ操作をネットワーク越しに要求する」ための入口であり、役割が異なります。
 4. **`PlacementController` は `NetworkBehaviour` だが、`GhostDomino`は`NetworkObject`を持たない完全ローカル。** `PlacementController`自体はPlayerと同じ`IsOwner`ガードでHost/Client間の操作を分離しています。Step 4まではConfirm時にClient自身がローカルで`Domino.prefab`をInstantiateしていましたが、Step 5で`RequestPlacementRpc`経由のRequestに変更し、実際のInstantiate/Spawnは常に`DominoSpawner`(Hostのみ)が行うようになりました。これによりReal DominoはHost/Server Authorityの`NetworkObject`として全員に同期されます(詳細はNetworking.mdの第17〜19章を参照)。
+5. **`DominoCleanupManager`(Step 7)は`DominoSpawner`から明示的に`Register()`されたDominoしか知らない。** Scene全体を検索する処理は一切持たず、`GameFlowManager.CurrentPhase`を読み取るだけでGameFlow側には何も書き込みません。BUILDING中に倒れて`Cleanup Delay`秒経過したDominoを`NetworkObject.Despawn()`するだけの、責務が明確に分離されたHost専用コンポーネントです(詳細はDominoLifecycle.mdを参照)。

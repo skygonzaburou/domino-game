@@ -1459,6 +1459,7 @@ GameObject:
   - component: {fileID: 592590541}
   - component: {fileID: 592590544}
   - component: {fileID: 592590545}
+  - component: {fileID: 592590546}
   m_Layer: 0
   m_Name: NetworkManager
   m_TagString: Untagged
@@ -1580,6 +1581,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Domino.DominoSystem.DominoSpawner
   dominoPrefab: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
   maxPlacementDistance: 3
+--- !u!114 &592590546
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 592590540}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 392d260a2f55bca4b9737534d205a4e6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.DominoSystem.DominoCleanupManager
+  fallenAngleThreshold: 60
+  cleanupDelay: 3
+  checkInterval: 0.2
 --- !u!4 &598564248 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 5636314518991483368, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
