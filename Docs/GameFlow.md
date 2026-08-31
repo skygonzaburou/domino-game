@@ -108,6 +108,7 @@ public void OnRunStart()
 {
     IsSatisfied = false;
     _excludedDominoes.Clear();
+    _dominoesInside.RemoveWhere(t => t == null);  // Step 7.1で追加(下記の既知の不具合と修正を参照)
     foreach (var t in _dominoesInside)
     {
         if (IsFallen(t)) _excludedDominoes.Add(t);
@@ -116,6 +117,8 @@ public void OnRunStart()
 ```
 
 **なぜこれが必要か**: BUILDING中にPlayerが誤ってDominoにぶつかり、たまたまStart/Checkpoint/Goal Areaの中で倒れてしまうことは十分あり得ます。この「事故」がRUNNING開始と同時に「もう通過済み」として扱われてしまうと、プレイヤーが実際に何もしていないのにゲームが進んでしまいます。除外リストによって、「このRUNNING開始時点で既に倒れていたDomino」と「このRUNNING中に新しく倒れたDomino」を区別しています。
+
+> **バグ修正の記録(Step 7.1)**: Step 7で追加したBUILDING中の自動Cleanup(`DominoLifecycle.md`参照)により、「Zone内で倒れたまま放置されたDomino」がNetwork Despawnされるようになりましたが、これによって`_dominoesInside`が**破棄済みのTransform参照**を保持し続けてしまう不具合が見つかりました。UnityはColliderが破棄される際、`OnTriggerExit`を確実には発火させないため、Cleanupで削除されたDominoがZoneの内部リストから正しく除去されないケースがあったのが原因です。この状態でRUNNINGが開始されると、`OnRunStart()`が破棄済みのTransformの`.up`にアクセスして`MissingReferenceException`を送出し、`GameFlowManager.BeginRun()`が`SetPhase(RUNNING)`に到達する前に処理を中断していました(RPCハンドラ内の未処理例外としてNGOがログに記録するのみで、`GamePhase`はREADYのまま変化しないため、「Fキーを押してもRUNNINGへ遷移しない」という形で現れていました)。修正として、`OnRunStart()`の先頭で`_dominoesInside`から破棄済み参照を`RemoveWhere(t => t == null)`で除去し、`IsFallen()`自体にもnullガードを追加しました。この修正はStart/Checkpoint/Goalの3種すべてに共通の基底クラス(`DominoFallenZone`)で行っているため、3つのZoneすべてに適用されています。
 
 ---
 

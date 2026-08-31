@@ -318,6 +318,59 @@ Host自身のPlayerでの操作、および`DominoSpawner.TryPlaceDomino()`の�
 
 ---
 
+## Step 7.1: Regression Fix / Stability Check
+
+Step 7完了後、ユーザー様ご自身の実プレイにより2件の問題が報告されました。Clear Judgement厳密化・FAILED Phase等のStep 7.5範囲には一切着手せず、この2件の調査・修正のみを行いました。「READY中はPlacement不可」は既存の意図した仕様(Step 6)であることを確認し、変更していません。
+
+### 問題1: READY → RUNNINGへ遷移しない(Regression)
+
+**原因**: Step 7で追加したBUILDING中のDomino自動Cleanupにより、Start/Checkpoint/Goal Area内で倒れたまま放置されたDominoがNetwork Despawnされるようになりましたが、UnityはColliderが破棄される際に`OnTriggerExit`を確実には発火させないため、`DominoFallenZone._dominoesInside`(Zone内にいるDominoのTransform参照を保持するリスト)に**破棄済みのTransform参照**が残ってしまうケースがありました。この状態でRUNNINGが開始されると、`DominoFallenZone.OnRunStart()`が破棄済み参照の`.up`にアクセスして`MissingReferenceException`を送出し、`GameFlowManager.BeginRun()`が`SetPhase(GamePhase.RUNNING)`に到達する前に処理が中断していました。RPCハンドラ内の未処理例外はNGOが内部でログするのみで、`GamePhase`はREADYのまま変化しないため、「Fキーを押しても反応がない」という形で症状が現れていました(実際にはConsoleに`MissingReferenceException`のError、および`[Netcode] Unhandled RPC exception!`が出力されていました)。
+
+**修正内容**: `DominoFallenZone.cs`のみを変更しました。`OnRunStart()`の先頭で`_dominoesInside.RemoveWhere(t => t == null)`により破棄済み参照を除去し、`IsFallen()`自体にも`if (t == null) return false;`のnullガードを追加しました。`DominoCleanupManager`側のコードは一切変更していません(Cleanup自体は正しく動作しており、問題はGameFlow側が「削除されたDominoの後始末」に対応していなかった点にありました)。Start/Checkpoint/Goalは共通の基底クラス`DominoFallenZone`を継承しているため、この修正は3種のZoneすべてに適用されます。詳細な原因分析は`GameFlow.md`第4章、`DominoLifecycle.md`第7.5章にも記録しました。
+
+**Host側テスト結果**: BUILDING中にStart Area内で倒したDominoをCleanupにより実際にDespawnさせた上で、両Player(Host+Client、`NetworkManager.ConnectedClientsIds`経由の代理呼び出し)をStart Areaに揃えてREADYへ遷移させ、genuine(実際のInput System経由の)Fキー入力で`RequestStartChallengeRpc`を呼び出したところ、修正前は無反応(Console上に例外)、修正後は`GamePhase`が正しく`RUNNING`へ遷移し、Consoleにも`[GameFlowManager] Phase -> RUNNING`以外のログが一切出ないことを確認しました。続けてCP1→CP2→Goalまで一連の流れを検証し、`SUCCESS`まで正常に到達することも確認しました。
+
+**Client Request側の確認結果**: RPC(`RequestStartChallengeRpc`)自体の宣言(`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]`)はStep 6から変更しておらず、Host/Clientどちらからでも呼び出せる設計を維持しています。ただしStep 4以降持ち越しの制約により、Client自身の実機キー入力を自動テストする手段は今回も見つかっていません。開発者ご自身でのClient側F操作の実機確認を推奨します。
+
+### 問題2: Live Preview MarkerがPlayer周囲を不自然に振れ回る
+
+**原因**: `PlayerStats.rotationSpeed`が`720度/秒`と非常に高速に設定されており、Playerが移動キーを押しながらCameraを大きく動かすと、`PlayerMotor.ApplyMovement()`がCamera相対の移動方向へ向けてPlayerの体をほぼ瞬時に回転させます。Step 6.1時点の`PlacementController.ComputeGroundAnchor()`はこの`transform.forward`を**無条件かつ毎フレームそのまま**Anchor計算に使っていたため、Playerの体が高速回転する場面でLive Preview Markerがそれにつられて素早く振れ回り、「Markerがぐるぐる回る」ように見えていました。Camera Transform自体を直接Anchorの基準にしていたわけではなく(Anchorの基準は最初からPlayer基準のままです)、あくまでPlayer本体の高速回転を減速なしに反映していたことが原因でした。
+
+調査の過程で、別の要因も1件発見しました。`groundMask`が既定で「すべてのLayer」を対象にしていたため(Ground/Dominoが共に`Default` Layerだったため)、Live Previewの地面検出Raycastが既に設置済みの他のReal Dominoにも当たり、Anchor Y座標がDomino1個分(約1m)浮いてしまう可能性がありました。こちらは「ぐるぐる回る」の直接原因ではありませんが、ユーザー様のご指示に基づき合わせて調査・修正しました。
+
+**修正前の計算**: `ComputeGroundAnchor()`は`transform.forward`をそのまま`Vector3.ProjectOnPlane`した値を毎フレーム使用しており、Playerの体の回転速度をそのまま継承していました。
+
+**修正後の計算**: `PlacementController`に減速版の方向ベクトル`_previewForward`を追加し、Playerの生の向き(`targetFlatForward`)へ`Vector3.RotateTowards()`で`previewFollowSpeed`(既定240度/秒、Inspector調整可能。Player本体の720度/秒よりあえて低く設定)を上限に追従させるよう変更しました。Lock/Cancel/Confirm/Phase変化(BUILDING以外への遷移)でLive Previewが再開する瞬間は`_previewForwardValid`をリセットし、その場でPlayerの実際の向きへ即座に一致させます(遅れて追いつくような不自然な動きが再開直後に出ないようにするため)。X/Z位置・Y座標・地面法線の計算方法自体は変更していません。
+
+Raycast対象については、`Domino.prefab`専用の新しいUnity Layer`"Domino"`を追加し、`PlacementController.groundMask`(既定値)から明示的に除外しました。Physics Layer Collision Matrixは変更しておらず、`Domino`↔`Domino`・`Domino`↔`Default`(Ground/Player)の物理衝突は引き続き有効なままです(Raycastの対象からのみ除外)。
+
+**Raycast対象**: Ghost Domino・Placement Markerはいずれも`Collider`を持たない完全ローカルの見た目専用オブジェクトのため、そもそもRaycastに拾われることはありません(`Architecture.md`第6章参照)。Player自身の自己Hitも、`forwardDistance`(1.2m)によりRaycast原点が既にPlayer本体のCapsule範囲外にあるため、通常のPlayerサイズでは発生しないことを確認しています。
+
+**Parent/World Transformの扱い**: Marker(`_markerInstance`)は`Instantiate(placementMarkerPrefab)`でParentを指定せずSceneルートに生成されており、`SetPositionAndRotation()`はWorld座標系で扱われています。Playerへの誤ったParent付けや二重Transformの問題は見つかりませんでした。
+
+**Preview/Lock/Re-Lockテスト結果**: Playerを開けた場所へ配置しCamera Yawをリセットした上で、移動キーを押しながら大きなMouse Deltaを与えてPlayer本体を高速回転させ、`_previewForward`が最終的にPlayerの真の向きへ正しく収束すること(発散しないこと)を確認しました。また、設置済みのDominoの真上にAnchorが来る状況を作り、修正後は`_anchorGroundPosition.y`が正しく地面の高さ(Domino頂点の高さではなく)になることを、Playerを意図的に地面から浮かせた状態でも同様にAnchor Yが地面の高さに収束することの2通りで確認し、Raycast自体が(Fallback値に頼らず)正しく機能していることを確認しました。Preview(自動表示・追従)→Right Click Lock(固定)→E(Placement Mode開始)→左クリック確定、という一連の流れをgenuine Input System経由の操作で実行し、Real Dominoが期待通りの位置(角度0.03°、正しく起立)で生成されることを確認しました。
+
+**発見・修正時の注意点(このStepでの反省点)**: 修正作業の途中、`LayerMask`型のSerializedFieldを`SerializedProperty.FindPropertyRelative("m_Bits")`経由で書き換えようとした際、実際には何も書き込まれず`m_Bits: 0`(Nothing = 何も検出しない設定)のままPrefabへ保存してしまうミスが一度ありました。`LayerMask`は`SerializedPropertyType.LayerMask`という特別な型として扱われ、`m_Bits`という子プロパティ経由ではなく**プロパティ自身の`.intValue`に直接アクセスする**必要があることが原因でした。この間違いに気づかず一度Play Modeでテストしてしまいましたが、たまたまPlayerもGroundもY=0の平地だったため、Raycastが完全に無効(`groundMask=0`)でも「地面のY座標にPlayer自身のY座標を代入するFallback処理」が偶然正しい値と一致し、不具合が発覚しませんでした。再発防止のため、Prefab上のフィールドをスクリプトで書き換えた際は、**保存後に必ずPrefabを再読み込みして値を読み戻す**、または**傾斜や高低差のある状況でテストする**(平地での一致に頼らない)ことを徹底する必要があります。この間違いは検証の途中で自己発見し、正しい方法(プロパティ自身の`.intValue`)で修正・再検証済みです。
+
+### Regression確認
+
+- **Placement**: Preview/Lock/Re-Lock/E/Escape/確定後の位置一致、いずれも正常であることを確認
+- **Cleanup**: BUILDING中の単体Domino自動Despawn(Cleanup Delay経過後)が引き続き正常に動作することを確認
+- **Network Domino**: Domino Physics・Chain Reaction挙動に変更がないことを確認(Layer変更はRaycast対象のみに影響し、Physics Collision Matrixは変更していません)
+- **GameFlow**: BUILDING → 全PlayerがStart Area → READY → F → RUNNING → CP1 → CP2 → Goal → SUCCESSの一連の流れが正常に動作することを確認。RUNNING中のPlacement不可・Cleanup無効も引き続き正常
+- **SUCCESS**: 到達後もCleanupが発生しないことを確認(Step 7から変更なし)
+
+### Console
+
+- Error: 0件(修正前に発生していた`MissingReferenceException`・`[Netcode] Unhandled RPC exception!`は、修正後の再検証で発生しないことを確認)
+- Warning: 0件(Step 7から持ち越しのUnityTransport Receive Queue警告等は今回のテスト範囲では発生せず)
+
+### 今回変更しなかったもの
+
+Clear Judgementの厳密化、FAILED Phase、Failure判定、Time Attack、Result UI、Retry/Restart、Lobby/Relay、RUNNING中のPlayer移動固定・Overview Cameraには一切着手していません。これらはStep 7.5以降の範囲です。
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

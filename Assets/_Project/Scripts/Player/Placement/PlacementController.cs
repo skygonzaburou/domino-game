@@ -24,6 +24,8 @@ namespace Domino.Player
         [SerializeField] private float groundRaycastRange = 3f;
         [SerializeField] private LayerMask groundMask = ~0;
         [SerializeField] private float dominoRestingHeight = 0.5f;
+        [Tooltip("Live Preview中、Player Forwardの変化にAnchorが追従する最大速度(度/秒)。PlayerStats.rotationSpeed(720)より意図的に低く抑え、Camera操作をしながら移動キーを押した際にPlayerの体が素早く向きを変えても、Markerがそれにつられて激しく振れ回らないようにする")]
+        [SerializeField] private float previewFollowSpeed = 240f;
 
         private PlayerMotor _motor;
         private GameObject _ghostInstance;
@@ -33,6 +35,17 @@ namespace Domino.Player
         private bool _isPlacing;
         private bool _markerActive;
         private bool _markerLocked;
+
+        // Smoothed stand-in for the player's raw flat-forward direction, used only to
+        // drive the Live Preview anchor. The player's own body can reorient near-instantly
+        // (rotationSpeed=720deg/s in PlayerStats) to chase the camera-relative move
+        // direction while a movement key is held; without this, ComputeGroundAnchor()
+        // would snap the Marker to match every frame, which reads as the Marker orbiting
+        // the player during a fast camera spin. Reset (not eased) whenever Live Preview
+        // is about to resume, so the very first frame after Lock/Cancel/Confirm/BUILDING
+        // re-entry is exact, and only frame-to-frame tracking after that is damped.
+        private Vector3 _previewForward = Vector3.forward;
+        private bool _previewForwardValid;
 
         // Single source of truth for where a Domino would go: computed once by
         // UpdateMarker()/EnterPlacementMode(), then reused as-is by the Marker, the
@@ -65,6 +78,7 @@ namespace Domino.Player
                 if (_isPlacing) CancelPlacement();
                 else if (_markerActive) HideMarker();
                 _markerLocked = false;
+                _previewForwardValid = false;
                 return;
             }
 
@@ -110,9 +124,21 @@ namespace Domino.Player
 
         private void ComputeGroundAnchor()
         {
-            Vector3 flatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
-            if (flatForward.sqrMagnitude < 0.0001f) flatForward = Vector3.forward;
+            Vector3 targetFlatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+            if (targetFlatForward.sqrMagnitude < 0.0001f) targetFlatForward = Vector3.forward;
 
+            if (!_previewForwardValid)
+            {
+                _previewForward = targetFlatForward;
+                _previewForwardValid = true;
+            }
+            else
+            {
+                float maxRadiansDelta = previewFollowSpeed * Mathf.Deg2Rad * Time.deltaTime;
+                _previewForward = Vector3.RotateTowards(_previewForward, targetFlatForward, maxRadiansDelta, 0f).normalized;
+            }
+
+            Vector3 flatForward = _previewForward;
             Vector3 basePos = transform.position + flatForward * forwardDistance;
             float groundY = transform.position.y;
             Vector3 groundNormal = Vector3.up;
@@ -225,6 +251,7 @@ namespace Domino.Player
             // Unlock so, if still BUILDING, next frame's Update() immediately
             // resumes the Live Preview following the player again.
             _markerLocked = false;
+            _previewForwardValid = false;
             _motor.SetMovementEnabled(true);
 
             if (ThirdPersonCamera.Instance != null)

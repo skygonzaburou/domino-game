@@ -118,7 +118,7 @@ Netcode for GameObjectsが「このGameObjectはネットワークで管理す�
 
 ---
 
-## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化)
+## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化、Step 7.1でAnchor追従を安定化)
 
 Step 4で、Playerが実際にDominoを配置するための`PlacementController`と`GhostDomino`を追加しました。Ghostは今も`NetworkObject`を持たない**各Playerのローカル画面だけで完結する機能**のままですが、Step 5で確定後のReal Dominoの生成方法が「ローカルInstantiate」から「HostへのRPCリクエスト」に変わりました(詳細は本章末とNetworking.mdの第17〜19章を参照)。Step 6では、床にPlacement位置を示す**Placement Marker**を追加しました。Step 6.1では、このMarkerを「右クリックしないと表示されない」ものから「BUILDING中は常に現在の配置候補を示し続けるLive Preview」に改善しました。
 
@@ -143,8 +143,9 @@ Step 4で、Playerが実際にDominoを配置するための`PlacementController
 [SerializeField] private float forwardDistance = 1.2f;           // Player前方何mに配置位置を出すか
 [SerializeField] private float hoverHeight = 0.15f;              // Ghostの首振りピボットを地面から何m浮かせるか(あくまでGhostの見た目用)
 [SerializeField] private float groundRaycastRange = 3f;          // 地面検出Raycastの長さ
-[SerializeField] private LayerMask groundMask = ~0;              // 地面検出の対象レイヤー
+[SerializeField] private LayerMask groundMask = Everything except "Domino"; // 地面検出の対象レイヤー。Step 7.1で"Domino"Layerを除外(下記参照)
 [SerializeField] private float dominoRestingHeight = 0.5f;       // Real Dominoを生成するY座標(地面からDomino半分の高さ)
+[SerializeField] private float previewFollowSpeed = 240f;        // Step 7.1で追加。Live Preview Anchorの向き追従を減速させる速度上限(度/秒)
 ```
 
 `dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。
@@ -186,6 +187,10 @@ private bool _markerLocked;  // false=Preview(追従中) / true=Locked(固定)
 **なぜLive Previewを追加したのか(Step 6.1)**: Step 6時点では、右クリックするまでMarkerが一切表示されず、「実際に押してみるまでどこに置かれるか分からない」という操作感の課題がありました。Dominoを何十個・何百個と置くゲームであるため、この「置く前に確認できない」という小さなストレスが積み重なりやすいという指摘を受け、Preview(常時追従・薄い表示)とLocked(固定・やや濃い表示)の2状態に分けることで、「歩きながら位置を合わせる→右クリックで確定→Eで配置」という自然な操作フローを実現しました。
 
 **Performance上の配慮**: Live Previewは毎フレームRaycastを1回行いますが、これは各Player自身のローカル処理であり、Network RPC・NetworkVariable・全Domino検索・他PlayerのMarker更新は一切発生しません(Step 6.1で追加した処理はローカルPlayer1人あたり軽量なRaycast 1回のみ)。
+
+**Live Preview Anchorの向き追従を減速させている理由(Step 7.1で追加)**: `PlayerStats.rotationSpeed`は`720度/秒`と非常に高速で、Playerが移動キーを押しながらCameraを大きく回すと、Player自身の体が(Camera相対の移動方向を追いかけて)ほぼ瞬時に向きを変えます。Step 6.1時点の`ComputeGroundAnchor()`は毎フレーム`transform.forward`をそのまま使っていたため、この「体が高速で向きを変える」場面でMarkerがPlayerの周りをぐるぐる回るように見える不具合が実プレイで見つかりました。原因はCamera Transformを直接使っていたことではなく(Anchorの基準は元からPlayer基準のままです)、Playerの体そのものが高速回転するケースで、それを毎フレーム無条件に反映していたことです。修正として、Playerの生の`transform.forward`とは別に`_previewForward`という減速版の方向ベクトルを持たせ、`Vector3.RotateTowards()`で`previewFollowSpeed`(既定240度/秒、Player本体の720度/秒よりあえて遅く設定)を上限に追従させるようにしました。Lock/Cancel/Confirm/Phase変化でLive Previewが再開する瞬間だけは`_previewForwardValid`をリセットし、その場でPlayerの実際の向きへ即座に一致させます(再開直後に「古い方向から追いつく」ような不自然な動きが出ないようにするため)。
+
+**Ground Raycastが設置済みDominoを拾わないようにした理由(Step 7.1で追加)**: 同じ不具合調査の過程で、`groundMask`が既定で「すべてのLayer」を対象にしていたため、Live Previewの地面検出Raycastが、Ground本体だけでなく**既に設置済みの他のReal Domino**にも当たってしまうケースがあることが分かりました(Ground/Domino双方とも元々`Default` Layerだったため)。Domino上にRaycastが当たると、Marker/Ghost/確定位置のY座標がDomino1個分の高さ(約1m)分だけ浮いてしまいます。この問題を解消するため、`Domino.prefab`専用の新しいUnity Layer `"Domino"`を追加し、`PlacementController.groundMask`から明示的に除外しました(Physics Layer Collision Matrix上は`Domino`↔`Domino`・`Domino`↔`Default`とも引き続き衝突する設定のままなので、Domino Physics・Chain Reactionの挙動には影響していません。Raycastの対象から除外しただけです)。
 
 ### PlacementMarker(`PlacementMarker.prefab`、通常の`MonoBehaviour`、Step 6で追加、Step 6.1でState対応)
 

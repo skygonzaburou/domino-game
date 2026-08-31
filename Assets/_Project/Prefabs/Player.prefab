@@ -239,8 +239,9 @@ MonoBehaviour:
   groundRaycastRange: 3
   groundMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 4294967039
   dominoRestingHeight: 0.5
+  previewFollowSpeed: 240
 --- !u!114 &462152421959077259
 MonoBehaviour:
   m_ObjectHideFlags: 0

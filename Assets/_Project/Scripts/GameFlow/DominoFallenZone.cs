@@ -23,6 +23,12 @@ namespace Domino.GameFlow
         {
             IsSatisfied = false;
             _excludedDominoes.Clear();
+
+            // A Domino destroyed while inside this trigger (e.g. BUILDING-time Cleanup
+            // despawn) does not reliably raise OnTriggerExit, so _dominoesInside can hold
+            // stale/destroyed Transform references. Purge them before touching any entry.
+            _dominoesInside.RemoveWhere(t => t == null);
+
             foreach (var t in _dominoesInside)
             {
                 if (IsFallen(t)) _excludedDominoes.Add(t);
@@ -66,6 +72,7 @@ namespace Domino.GameFlow
 
         private bool IsFallen(Transform t)
         {
+            if (t == null) return false;
             return Vector3.Angle(t.up, Vector3.up) >= fallenAngleThreshold;
         }
     }
