@@ -270,14 +270,25 @@ Step 7.5時点の実装では、`_playersInStartArea`の更新を`OnTriggerEnter
 
 ```csharp
 // StartAreaZone.cs: OnTriggerEnter/Exitの履歴に関係なく、今この瞬間の座標だけで判定する
+// boundaryTolerance(既定0.05m)はStep 7.8.1で追加。詳細は次項を参照
 public bool ContainsWorldPoint(Vector3 worldPosition)
 {
+    Vector3 scale = transform.lossyScale;
+    Vector3 toleranceLocal = new Vector3(
+        boundaryTolerance / Mathf.Max(Mathf.Abs(scale.x), 0.0001f),
+        boundaryTolerance / Mathf.Max(Mathf.Abs(scale.y), 0.0001f),
+        boundaryTolerance / Mathf.Max(Mathf.Abs(scale.z), 0.0001f));
+
     Vector3 local = transform.InverseTransformPoint(worldPosition);
-    Vector3 halfSize = _boxCollider.size * 0.5f;
+    Vector3 halfSize = _boxCollider.size * 0.5f + toleranceLocal;
     Vector3 diff = local - _boxCollider.center;
     return Mathf.Abs(diff.x) <= halfSize.x && Mathf.Abs(diff.y) <= halfSize.y && Mathf.Abs(diff.z) <= halfSize.z;
 }
 ```
+
+### バグ修正の記録: 境界許容誤差ゼロ問題(Step 7.8.1)
+
+上記の`ContainsWorldPoint()`は当初、`Mathf.Abs(diff.y) <= halfSize.y`という**許容誤差ゼロ**の判定でした。Start AreaのZoneはY方向の下端がちょうど地面の高さ(World Y=0)に来るよう配置されているため、地面に立つPlayerのY座標もちょうどこの境界線上に来ます。しかし実際には、Rigidbodyの静止位置はPhysics EngineのContact Offset等により`Y=0.000000`ちょうどにはならず、`-0.001`〜`-0.02`程度わずかにマイナス側へ振れることが普通にあります。このわずかな誤差により`ContainsWorldPoint()`が実質的にZone内にいるPlayerに対して`False`を返してしまい、`ReconcilePlayersInStartArea()`が`NotifyPlayerEnteredStart()`直後の再検証で該当Playerを即座に取り消してしまう(=Start Area判定・READY・F→RUNNING・Overview Cameraすべてが動作しないように見える)という不具合につながっていました。修正として`boundaryTolerance`(既定0.05m)を追加し、`transform.lossyScale`で軸ごとにLocal空間の許容誤差へ変換した上で`halfSize`に加算するようにしています。
 
 ```csharp
 // GameFlowManager.cs: ReevaluateReady()の冒頭で必ず呼ぶ

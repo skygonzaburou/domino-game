@@ -9,6 +9,9 @@ namespace Domino.GameFlow
         [Tooltip("PlayerのCapsule半径ぶん、実際に移動できる範囲をCollider境界より内側に狭めるマージン(m)")]
         [SerializeField] private float playerRadiusMargin = 0.5f;
 
+        [Tooltip("ContainsWorldPoint()の境界判定に持たせる許容誤差(m)。Rigidbodyの静止位置はContact Offset等によりY=0からごくわずかにズレることがあり、Y軸の下端がちょうど地面の高さと一致するこのZoneでは、許容誤差が無いと誤ってFalseと判定されることがある")]
+        [SerializeField] private float boundaryTolerance = 0.05f;
+
         private BoxCollider _boxCollider;
 
         private void Awake()
@@ -44,8 +47,14 @@ namespace Domino.GameFlow
         // than trusting cumulative trigger events forever (see Step 7.7 notes in GameFlow.md).
         public bool ContainsWorldPoint(Vector3 worldPosition)
         {
+            Vector3 scale = transform.lossyScale;
+            Vector3 toleranceLocal = new Vector3(
+                boundaryTolerance / Mathf.Max(Mathf.Abs(scale.x), 0.0001f),
+                boundaryTolerance / Mathf.Max(Mathf.Abs(scale.y), 0.0001f),
+                boundaryTolerance / Mathf.Max(Mathf.Abs(scale.z), 0.0001f));
+
             Vector3 local = transform.InverseTransformPoint(worldPosition);
-            Vector3 halfSize = _boxCollider.size * 0.5f;
+            Vector3 halfSize = _boxCollider.size * 0.5f + toleranceLocal;
             Vector3 diff = local - _boxCollider.center;
             return Mathf.Abs(diff.x) <= halfSize.x && Mathf.Abs(diff.y) <= halfSize.y && Mathf.Abs(diff.z) <= halfSize.z;
         }

@@ -547,7 +547,7 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 
 ## Step 7.8.1: GameFlow Regression Restoration
 
-開発者から、「Step 7.7までは動作していたStart Area判定/READY/F→RUNNING/Overview Cameraが、Step 7.8時点の実機操作では動作しない」との報告があり、Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`、Step 7.8で承認済みのUX)には一切手を加えないという制約のもとで調査しました。結論として、**コードレベルの回帰(Regression)は見つかりませんでした**。`git diff 67ec5c8..ce729df`(Step 7.7→Step 7.8)は`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`/Docsのみを含み、`GameFlowManager.cs`/`StartAreaZone.cs`/`ChallengeInput.cs`/`ThirdPersonCamera.cs`/`OverviewCameraPoint.cs`/`Player.prefab`はいずれも1バイトも変化していません。このStepでの最終的なコード差分は**ゼロ**です(`git diff --stat`で確認)。
+開発者から、「Step 7.7までは動作していたStart Area判定/READY/F→RUNNING/Overview Cameraが、Step 7.8時点の実機操作では動作しない」との報告があり、Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`、Step 7.8で承認済みのUX)には一切手を加えないという制約のもとで調査しました。`git diff 67ec5c8..ce729df`(Step 7.7→Step 7.8)は`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`/Docsのみを含み、`GameFlowManager.cs`/`StartAreaZone.cs`/`ChallengeInput.cs`/`ThirdPersonCamera.cs`/`OverviewCameraPoint.cs`/`Player.prefab`はいずれも1バイトも変化していないため、この2コミット間の差分そのものには原因がありませんでした。**最終的な原因は、Step 7.7で`ContainsWorldPoint()`(Ready Re-arm Fix用に導入)へ実装した境界判定に、以前から存在していた許容誤差ゼロのバグでした**(下記「根本原因の結論」参照)。
 
 ### 調査方法
 
@@ -563,26 +563,31 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 - **FAILED→BUILDING Reset、Ready Re-arm Fix(Step 7.7)の健全性**: Player がStart Areaに留まったままFAILEDへ遷移させ、`_readyRearmPending=True`によって即READYへ戻らないこと(Step 7.7の修正が退行していないこと)、Playerが一度退出→再入場することで正しくREADYへ戻ることを、**3回連続の Attempt サイクル**で確認(すべて`[GameFlowManager] Phase -> ...`ログで裏付け)
 - 上記すべてのテストを通じて、Console上のError/Warningは**0件**
 
-### なぜStep 7.8ではなく、より詳しい調査が必要だったか(参考)
+### 途中経過: F キー入力自体はEditor特有の制約で不安定だった(参考)
 
-上記の検証を1回目に試みた際、2回目以降のF キー入力が`wasPressedThisFrame`を検出できないという事象が再現しました。一時的な診断ログ(`ChallengeInput.Update()`内、コミット前に削除済み)を仕込んで原因を追ったところ、Unity Editor の Input System設定`editorInputBehaviorInPlayMode = PointersAndKeyboardsRespectGameViewFocus`(Game ViewがOSフォーカスを持っていない間、Keyboard/Mouse入力を無視・リセットする)が原因であることを特定しました。Game Viewへ明示的に`Focus()`した直後であれば、F キー入力は毎回・即座(キュー投入の翌フレーム以内)に本物の`RequestStartChallengeRpc()`呼び出しへつながることを2回、独立して確認しています。この設定自体はStep 7.7/7.8間で変更されておらず(そもそもプロジェクト設定であり、コード差分の対象外)、Step 2の`ImplementationStatus.md`(78行目)で既に「MPPMのVirtual PlayerウィンドウがOSフォーカスを失うと停止して見える」という類似の既知事象として記録されていたものと同根です。
+上記の検証を1回目に試みた際、2回目以降のF キー入力が`wasPressedThisFrame`を検出できないという事象が再現しました。一時的な診断ログ(`ChallengeInput.Update()`内、コミット前に削除済み)を仕込んで原因を追ったところ、Unity Editor の Input System設定`editorInputBehaviorInPlayMode = PointersAndKeyboardsRespectGameViewFocus`(Game ViewがOSフォーカスを持っていない間、Keyboard/Mouse入力を無視・リセットする)が原因であることを特定しました。この設定自体はStep 7.7/7.8間で変更されておらず(プロジェクト設定であり、コード差分の対象外)、Step 2の`ImplementationStatus.md`(78行目)で既に類似の既知事象として記録されていたものと同根です。Game Viewへ明示的にフォーカスした状態であれば、この制約下でもF キー入力は正しく`RequestStartChallengeRpc()`まで到達することを確認していました。この時点では「コードは正しく動いている、開発者の実機では何らかの入力フォーカスの問題が起きているのでは」という仮説で報告しましたが、これは**誤りでした**。開発者から「2人目の接続時、`readyPlayers=1/2`のようなログすら一度も出ない」という追加報告を受け、Host+Client 2人が実際に接続した状態でライブにScene状態を観測し直したところ、以下の本当の原因が見つかりました。
 
-### 根本原因の結論
+### 根本原因の結論(訂正)
 
-- **Start Area検知/READY/F→RUNNING/Overview Cameraのいずれについても、コード・Prefab・Scene参照・Layer設定に問題は見つかりませんでした**。すべて本物の仕組み(Physics Trigger、Input System、RPC、Camera Blend)を経由して正常に動作することを確認しています
-- 開発者が実機で遭遇した不具合の技術的な原因は特定できていませんが、有力な仮説は「F キー入力(あるいはそれ以前のWASD移動)を送った瞬間、Game ViewウィンドウがOSフォーカスを持っていなかった」というものです。上記`editorInputBehaviorInPlayMode`設定は、Game Viewが非フォーカスの間キーボード入力を丸ごと無視するため、Start Area進入のための移動そのものが実際にはPlayerへ届いていなかった場合、Start Area判定/READY/F/Overview Cameraの4つすべてが「動いていないように見える」という今回の報告と矛盾なく一致します
-- **今回、私(Claude)側では「Step 7.8のRegression Testでは成功と報告したが実際は動いていなかった」原因を再現できませんでした**。Step 7.8時点のRegression Testは、GameFlow部分についてReflection経由の直接呼び出しに依存する割合が高く(Placement部分のgenuine Input検証に比べて手薄でした)、これは実プレイでの検証としては不十分だったという点は事実であり、今回それを是正し、genuineな経路での検証に置き換えました
+**`StartAreaZone.ContainsWorldPoint()`(Step 7.7でReady Re-arm Fixのために導入)の境界判定に、許容誤差(epsilon)が全く無いバグがありました。**
+
+- Start Areaの`BoxCollider`は、Y方向のワールド半径がちょうど1.5m(Local size 1 × lossyScale 3 × 0.5)で、Zoneの下端がちょうど地面の高さ(World Y=0)に一致するよう配置されています。これは意図的な配置で、地面に立つPlayerがちょうどZoneの下端付近に来る設計です
+- `ContainsWorldPoint()`は`Mathf.Abs(diff.y) <= halfSize.y`という**許容誤差ゼロの厳密な境界判定**でした。Playerの実際の静止位置(Y)は、Rigidbody物理演算のContact Offset(接触許容量)や、NetworkTransformの同期・補間によるごくわずかな数値誤差により、`0.000000`ちょうどではなく`-0.001`〜`-0.02`程度のわずかにマイナス側へ振れることが普通にあります。この場合、`local.y`が`halfSize.y`をほんのわずかに超えてしまい、**Playerが目視上・実質上は完全にZone内にいるにもかかわらず`ContainsWorldPoint()`が`False`を返す**ことを、Playモードで実際に数値を確認して再現しました(`world.y=0.0000`→`True`だが`world.y=-0.0010`→`False`)
+- `ReevaluateReady()`は`NotifyPlayerEnteredStart()`(本物のTrigger Enterイベント)の直後に必ず`ReconcilePlayersInStartArea()`を呼び、`ContainsWorldPoint()`で全Playerを再検証します。そのため、Trigger Enterイベント自体は正しく発火して`_playersInStartArea`に一度追加されても、直後の再検証でY座標がわずかにマイナス側だと**即座に取り消され**、`_playersInStartArea`が実質的に更新されないまま終わる、という形で症状が現れていました。Phaseが一度も変化しないため、`SetPhase()`のログ(`readyPlayers=X/Y`を含む)も一切出力されません。「カウントのログが出ない」「READYにならない」という開発者の報告と完全に一致します
+- **Step 7.8の私自身のRegression Testでこれを検出できなかった理由**: 自動テストでは`NetworkTransform.Teleport()`でPlayerを`Y=0.1`(境界から余裕のある高さ)へ配置しており、ちょうど境界に来る自然な物理静止(`Y≈0`)のケースを一度も踏んでいませんでした。1人プレイでのReflectionベースの直接呼び出しテストでも同様に、境界ぎりぎりの数値を踏むことはありませんでした
+- F→RUNNING/Overview Cameraの実装そのものにバグは無く(前回報告の通り)、READY自体に到達できなかったことがすべての表面症状(Start Area判定・READY・F→RUNNING・Overview Camera)の単一の共通原因でした
 
 ### 今後の予防策
 
-- GameFlow関連のRegression Testでは、今後もReflection経由の直接呼び出しのみに頼らず、可能な限り本物のPhysics Trigger/Input System/RPCの経路を経由させて確認する
-- 手動プレイ時にF キーやWASDが反応しない場合は、まずGame Viewウィンドウを一度クリックしてOSフォーカスを与えてから再試行することを推奨する(Editor Play Mode特有の制約であり、実際にビルドしたPlayerでは発生しません)
-- Console上の`[GameFlowManager] Phase -> ...`ログは、Phase遷移が実際に発生したかどうかを判別する確実な手がかりになるため、動作が疑わしい場合はまずこのログの有無を確認する
+- 境界判定・距離判定を書く際は、Rigidbody/NetworkTransformの実際の静止位置が理論値からわずかにズレることを前提に、意図的な許容誤差(epsilon)を必ず設ける
+- 自動テストでPlayerを配置する際は、境界からわずかに余裕のある位置だけでなく、**実際に自然落下・物理静止させた座標**でも最低1回は検証する
+- Console上の`[GameFlowManager] Phase -> ...`ログの有無(特に`readyPlayers=X/Y`のXが増えるかどうか)は、Phase遷移が実際に発生したかどうかを判別する確実な手がかりになるため、動作が疑わしい場合はまずこのログの有無を確認する
 
 ### Fix
 
-- コード・Prefab・Scene設定への変更は行っていません(`git diff --stat`が空であることを確認済み)。調査のために`ChallengeInput.cs`へ一時的な診断ログを追加しましたが、検証完了後に完全に元の内容へ復元し、`git diff`で元のコミット内容と完全一致することを確認しています
-- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一度も変更していません
+- `Assets/_Project/Scripts/GameFlow/StartAreaZone.cs`の`ContainsWorldPoint()`に、`boundaryTolerance`(既定0.05m、Inspectorから調整可能)という許容誤差を追加。ワールド空間で意味のある値になるよう、`transform.lossyScale`で軸ごとに逆算してLocal空間の許容誤差へ変換しています
+- `world.y=-0.06`(意図的に許容誤差を超える位置)では引き続き`False`を返すことを確認しており、Zoneの形状自体を実質的に変えるものではなく、物理演算由来の数mm〜数cmのノイズだけを吸収する変更です
+- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一度も変更していません(`StartAreaZone.cs`はGameFlow側のファイルであり、Placement Freezeの対象外です)
 
 ### Placement Freeze確認
 
