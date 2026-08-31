@@ -504,6 +504,47 @@ Play Mode上で、Phase遷移の直接操作とgenuine Input System入力(`Queue
 
 ---
 
+## Step 7.8: Front Placement / Free Domino Rotation
+
+Step 7.8では、実プレイのゲームデザイン判断により、Step 7.7で導入したCamera Aim方式のPlacement位置決定を撤回し、Step 4〜7.1と同じ「Character正面基準」へ戻しました。代わりに、Placement Mode中にDominoの向き(Yaw)をPlayerが自由に操作できる機能を新設し、「どこに置くか(Character正面で固定)」と「どの向きに置くか(Yawで自由に選択)」を分離しました。Strict Clear判定・Failure・Reset・Ready Re-arm(Step 7.5/7.7)、Start Area拘束・Overview Camera・Screen-relative Movement(Step 7.6/7.7)には一切変更を加えていません。
+
+### 実装済み
+
+- `PlacementController.ComputeGroundAnchor()`をStep 7.7以前の実装へ戻し、`Player Position + Player Forward * placementDistance`→Ground Raycastという計算に復帰。Camera Aim専用だった`maxPlacementRange`/`cameraAimRange`フィールド、画面中央Reticleの`OnGUI()`はいずれも削除
+- `PlacementController`に`rotateLeftKey`(既定A)/`rotateRightKey`(既定D)/`yawRotationSpeed`(既定135度/秒)を追加。Placement Mode中(`_isPlacing == true`)、A/Dの`isPressed`を毎フレーム確認し、`_yawOffsetDegrees`(float、0〜360への正規化や角度制限は一切なし)を加減算する`ApplyPlacementRotation()`を新設
+- `EnterPlacementMode()`で`_yawOffsetDegrees = 0`・`_placementBaseRotation = _anchorFlatRotation`(Character正面)をリセット。`ExitPlacementMode()`(Confirm/Cancelいずれも通る共通処理)でも`_yawOffsetDegrees = 0`にリセットするため、次のPlacement Mode開始時は必ずCharacter正面から始まる
+- `GhostDomino.cs`に`SetBaseRotation(Quaternion)`を追加。既存のWobble計算(`_timer`・`Quaternion.AngleAxis(wobbleAngle, Vector3.right)`)には一切手を加えず、外部(`PlacementController`)がYaw込みの`_baseRotation`を随時更新できるようにしただけで、YawとWobble Tiltがローカル軸基準で自然に合成されるようにした
+- `PlacementMarker.prefab`のMeshを`Cylinder`から`Cube`へ変更し、`PlacementMarker.cs`のFieldを`size`(円直径)から`width`/`depth`(既定0.45/0.25、実際のDomino 0.35×0.15に近い長方形)へ変更。Lock中はYaw操作のたびに`ApplyPlacementRotation()`がMarkerの回転(位置は不変)も更新する
+- `ConfirmPlacement()`自体は無変更(元々`_ghostDomino.CurrentRotation`をそのままRPCへ渡す設計だったため、Yaw+Wobble Tilt込みの最終回転が自動的にそのまま送信される)
+
+### 動作確認済み
+
+Play Modeで、Phase遷移の直接操作とgenuine Input System入力、および`PlacementController.Update()`の直接呼び出し(下記「テスト手法上の教訓」参照)を組み合わせて確認しました。
+
+- **Character正面基準への復帰**: Cameraのみを大きく回転させても(`playerForward`は不変)、Anchor位置が完全に不変であることを数値上確認。Player位置(0,0,0)・Forward(0,0,1)に対し、Anchorが常に`placementDistance`(既定1.2m)先の(0,0,1.2)になることを確認
+- **Yaw Rotation**: `_yawOffsetDegrees`が0から開始し(Initial Yaw = Character正面)、A/Dで正しく加減算されること、130フレーム分の連続回転で290°を超えても特に制限なく回転し続けること(360°以上の自由回転)を確認
+- **Wobble Tiltとの合成**: `GhostDomino._baseRotation`のY成分が`_yawOffsetDegrees`と常に一致すること(Yawが正しくGhostへ伝わっている)、`CurrentRotation`(Wobble込み)はこれと異なる値になること(Wobbleが正しく重ねて適用され続けている)を確認。MarkerのY回転も`_yawOffsetDegrees`と一致することを確認(Yaw+Wobbleが正しく分離されている証拠)
+- **Confirm**: Ghostの`CurrentRotation`(Yaw 291.71° + Tilt 23°相当のEuler)をそのまま`DominoSpawner.TryPlaceDomino()`へ渡した結果、Real Dominoが寸分違わず同じ回転(Euler 23.00, 291.71, 0.00)でSpawnされることを確認。自動補正が一切行われていないことの直接証拠
+- **Yaw Adjustment Reset**: Confirm後、`_yawOffsetDegrees`が`0`に戻ることを確認
+- **Reticle削除**: `PlacementController`に`OnGUI`メソッドが存在しないこと(削除済み)をReflectionで確認
+- **既存機能回帰**: BUILDING中のDomino Cleanup、Start→CP1→CP2→Goal→SUCCESSの正常ルート(Strict Clear判定含む)が引き続き正常に動作することを確認。Console Errorは検証全体を通じて0件
+
+### テスト手法上の教訓
+
+検証の過程で、Input Systemの`QueueStateEvent`でA/Dキーの「押しっぱなし」状態(`isPressed`)を模擬しても、`PlacementController.Update()`が実際に呼ばれるタイミングまでにその状態が失われてしまい、`_yawOffsetDegrees`が加算されないという事象が発生しました。`Keyboard.current.dKey.isPressed`を直後に確認すると`True`が返るにもかかわらず、Unity自身のフレームスケジューリングで`Update()`が呼ばれるまでの間に模擬入力の状態が失われている(この環境固有の制約)ことが原因と判断しました。これはこれまでのStepで確認してきた「1回のQueueStateEventによる模擬Hold状態がTool呼び出しの往復時間をまたいで安定して継続するとは限らない」という既知の制約の一種です。`PlacementController.Update()`をReflection経由で直接呼び出し、`isPressed=True`を確認した直後に同期的に実行することで、ロジック自体が正しく動作することを確認しました(`yawOffset`が期待通りに`135度/秒 × Time.deltaTime`ぶん加算されることを確認)。実際のプレイヤーによる本物のキー入力はUnityのInput Systemへ継続的に供給されるため、この制約が実プレイに影響することはありません。
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作による直接確認**: 従来通りの制約により、Client自身のPlacement操作(Character正面基準・Yaw回転)を実機で直接確認することはできていません。`IsOwner`ガードによりHost/Clientで同一のコードパスを通るため、Host側の確認結果が同様に当てはまるはずですが、開発者ご自身での実機確認を推奨します
+- 上記の理由により、**genuine(模擬ではない)Input Systemの`isPressed`ポーリングによる連続回転の様子を、実際のフレームスケジューリング下で直接観測することはできませんでした**。ロジック自体の正しさはReflection経由の直接呼び出しで確認済みです
+
+### 将来確認が必要な事項
+
+- `yawRotationSpeed`(既定135度/秒)は仮の値です。実際にプレイして「速すぎる/遅すぎる」と感じた場合は調整が必要です
+- Marker Footprint(Width 0.45 / Depth 0.25)のサイズ感も仮のものです。実際のStageで密に配置した際の見やすさは、開発者ご自身での確認を推奨します
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

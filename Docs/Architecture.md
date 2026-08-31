@@ -140,8 +140,8 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 |---|---|---|---|
 | [PlayerStats.cs](../Assets/_Project/Scripts/Player/PlayerStats.cs) | `Domino.Player.PlayerStats` | `MonoBehaviour` | 移動速度などの数値を保持するだけの「データの入れ物」。ロジックは一切持たない |
 | [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用)。Step 7.6でStart Area拘束(`ConstrainToStartArea()`)を追加。Step 7.7で移動基準を常にCamera相対(Third Person/Overview自動切替)へ統一し直した(Step 7.6のPlayer相対化は撤回) |
-| [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更。Step 7.7でAnchor計算をPlayer前方基準からCamera Aim基準へ再設計し、Screen Center Reticleを追加 |
-| [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント |
+| [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更。Step 7.7でAnchor計算を一時的にCamera Aim基準へ変更したが、Step 7.8でCharacter正面基準へ復帰し、代わりにPlacement Mode中の自由なDomino Yaw回転(A/D)を追加 |
+| [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント。Step 7.8で`SetBaseRotation()`を追加し、`PlacementController`からPlacement Mode中いつでもYawを更新できるようにした(Wobble計算自体は無変更) |
 | [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする。Step 7でSpawn直後の`DominoCleanupManager.Register()`呼び出しを追加 |
 | [DominoCleanupManager.cs](../Assets/_Project/Scripts/Domino/DominoCleanupManager.cs) | `Domino.DominoSystem.DominoCleanupManager` | `MonoBehaviour` | Step 7で追加。Host上でのみ、BUILDING中に倒れたまま`Cleanup Delay`秒経過したDominoを`NetworkObject.Despawn()`する。`DominoSpawner`が登録したDominoのみを一定間隔(`Check Interval`)でまとめて確認する(Domino単位の重い`Update()`は持たない) |
 | [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加。Step 7.6で`GameFlowManager.IsChallengeActive`に連動したOverview Cameraへのブレンド(Position/Rotation/FOV)を追加 |
@@ -218,15 +218,17 @@ GhostDomino (Root, 単一GameObject)
 
 `Domino.prefab`と見比べると、`BoxCollider`と`Rigidbody`が意図的に存在しません。これによって「PhysicsやPlayer/他のDominoと一切干渉しない、見た目だけのプレビュー」であることをコードの分岐(`if`文)ではなく**コンポーネント構成そのもの**で保証しています。
 
-`PlacementMarker.prefab`(`Assets/_Project/Prefabs/PlacementMarker.prefab`、Step 6で追加)の階層構造:
+`PlacementMarker.prefab`(`Assets/_Project/Prefabs/PlacementMarker.prefab`、Step 6で追加、Step 7.8でCube形状化)の階層構造:
 
 ```
 PlacementMarker (Root, 単一GameObject)
-├─ Transform      (Cylinderプリミティブ、localScale 0.6 x 0.05 x 0.6 = 薄い円盤状)
-├─ MeshFilter     (Cylinder)
+├─ Transform      (Cubeプリミティブ、localScale 0.45 x 0.05 x 0.25 = 薄い長方形。Step 7.8以前はCylinderの円盤)
+├─ MeshFilter     (Cube)
 ├─ MeshRenderer   (Material: PlacementMarkerMaterial、半透明)
 └─ PlacementMarker (サイズ・不透明度をAwake()で反映するだけ。Collider・Rigidbody・NetworkObjectは持たない)
 ```
+
+Step 7.8で円盤(Cylinder)から長方形(Cube)へ変更したのは、Placement Mode中に自由なYaw回転が追加されたことで、Markerの向き(=どちらへDominoを置こうとしているか)を視覚的に示す必要が生まれたためです。円形では回転しても見た目が変わらず、向きが伝わりませんでした。
 
 GhostDominoと同じく、Collider・Rigidbody・NetworkObjectを一切持たない完全ローカルの見た目専用オブジェクトです。
 

@@ -10,8 +10,11 @@ namespace Domino.Player
 
     public class PlacementMarker : MonoBehaviour
     {
-        [Header("Size")]
-        [SerializeField] private float size = 0.6f;
+        [Header("Size (Step 7.8: rectangular Domino footprint)")]
+        [Tooltip("Local X。Dominoの幅(0.35)に少し余裕を持たせた値")]
+        [SerializeField] private float width = 0.45f;
+        [Tooltip("Local Z。Dominoの奥行き(0.15)に少し余裕を持たせた値。Chain方向に沿う")]
+        [SerializeField] private float depth = 0.25f;
         [SerializeField] private float groundOffset = 0.02f;
 
         [Header("Opacity")]
@@ -26,8 +29,8 @@ namespace Domino.Player
         private void Awake()
         {
             Vector3 scale = transform.localScale;
-            scale.x = size;
-            scale.z = size;
+            scale.x = width;
+            scale.z = depth;
             transform.localScale = scale;
 
             var meshRenderer = GetComponent<MeshRenderer>();

@@ -17,6 +17,15 @@ namespace Domino.DominoSystem
             _baseRotation = transform.rotation;
         }
 
+        // Step 7.8: lets PlacementController drive Yaw (A/D) live during Placement Mode
+        // without touching the Wobble timer/phase, so free rotation and the ongoing tilt
+        // animation compose cleanly - Update() below re-applies the tilt on top of whatever
+        // base was set most recently, around the Domino's own (now Yaw-rotated) local axis.
+        public void SetBaseRotation(Quaternion baseRotation)
+        {
+            _baseRotation = baseRotation;
+        }
+
         public Quaternion CurrentRotation => transform.rotation;
 
         private void Update()

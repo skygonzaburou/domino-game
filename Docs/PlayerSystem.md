@@ -123,19 +123,20 @@ Netcode for GameObjectsが「このGameObjectはネットワークで管理す�
 
 ---
 
-## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化、Step 7.1でAnchor追従を安定化、Step 7.7でCamera Aim基準へ再設計)
+## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化、Step 7.1でAnchor追従を安定化、Step 7.8でCharacter正面基準+自由Yaw回転へ再設計)
 
 Step 4で、Playerが実際にDominoを配置するための`PlacementController`と`GhostDomino`を追加しました。Ghostは今も`NetworkObject`を持たない**各Playerのローカル画面だけで完結する機能**のままですが、Step 5で確定後のReal Dominoの生成方法が「ローカルInstantiate」から「HostへのRPCリクエスト」に変わりました(詳細は本章末とNetworking.mdの第17〜19章を参照)。Step 6では、床にPlacement位置を示す**Placement Marker**を追加しました。Step 6.1では、このMarkerを「右クリックしないと表示されない」ものから「BUILDING中は常に現在の配置候補を示し続けるLive Preview」に改善しました。
 
-**Step 7.7で、Placement位置の基準を「Player前方」から「Camera Aim(画面中央が指す床の位置)」へ変更しました。** これは実際にプレイした結果、「Characterがどちらを向いているか」にPlacement位置が強く依存し、狙った場所へ置きにくいというフィードバックを受けたものです。以下の説明は**Step 7.7時点の実装**を基準にしています。
+Step 7.7では一度Placement位置の基準を「Camera Aim(画面中央が指す床の位置)」に変更しましたが、実際にプレイした結果「Placement PositionはCharacter基準のままにし、代わりにDominoの向き(Yaw)をPlacement Mode中に自由に変えられるようにしたい」というゲームデザイン上の判断があり、**Step 7.8でPlacement位置の基準をCharacter正面(Player Forward)へ戻し**、新たに自由なYaw回転操作を追加しました。以下の説明は**Step 7.8時点の実装**を基準にしています。
 
-### 入力の役割(Step 6.1で確定)
+### 入力の役割(Step 7.8で確定)
 
 | 操作 | やること |
 |---|---|
-| (何もしない) | Markerが**Preview状態**で常に表示され、Playerの位置・向きに追従し続ける |
-| 右クリック | 今Previewが示している位置でMarkerを**Locked状態**にする(以後Playerが動いても位置は固定)。既にLockedならその場で今の位置へ再Lock |
+| (何もしない) | Markerが**Preview状態**で常に表示され、Characterの正面位置(Nose方向)へ追従し続ける。Cameraだけ動かしても位置は変わらない |
+| 右クリック | 今Previewが示している位置でMarkerを**Locked状態**にする(以後Characterが動いても位置は固定)。既にLockedならその場で今の位置へ再Lock |
 | `E` | Lockedでなければ今のPreview位置をその場でLockした上でPlacement Mode開始。既にLockedならそのままPlacement Mode開始 |
+| `A` / `D`(Placement Mode中のみ) | DominoをYaw(垂直軸)方向へ自由に回転。押し続けている間、連続的に回転し続ける(360°以上、上限なし) |
 | 左クリック | 確定(Real Dominoを生成) |
 | `Escape` | キャンセル(Placement Mode中のキャンセル手段はEscapeのみ) |
 
@@ -145,43 +146,69 @@ Step 4で、Playerが実際にDominoを配置するための`PlacementController
 ```csharp
 [SerializeField] private Key enterPlacementKey = Key.E;        // Placement Mode開始キー
 [SerializeField] private Key cancelKey = Key.Escape;            // キャンセルキー
+[SerializeField] private Key rotateLeftKey = Key.A;             // Step 7.8で追加。Yaw左回転キー
+[SerializeField] private Key rotateRightKey = Key.D;            // Step 7.8で追加。Yaw右回転キー
 [SerializeField] private GameObject ghostDominoPrefab;           // Ghost Dominoの元プレハブ
 [SerializeField] private GameObject placementMarkerPrefab;       // Step 6で追加。Placement Markerの元プレハブ
-[SerializeField] private float maxPlacementRange = 2.7f;         // Step 7.7で追加。Player中心からの水平距離で置ける最大範囲
+[SerializeField] private float placementDistance = 1.2f;         // Step 7.8で追加(Step 4〜7.1の forwardDistance に相当)。Character正面何mに配置位置を出すか
 [SerializeField] private float hoverHeight = 0.15f;              // Ghostの首振りピボットを地面から何m浮かせるか(あくまでGhostの見た目用)
-[SerializeField] private float cameraAimRange = 50f;             // Step 7.7で追加。画面中央Raycastの最大距離(奥のStage Surface検出用)
-[SerializeField] private float groundRaycastRange = 3f;          // Range Clamp後のXZ位置で地面の高さ・傾きを検出する垂直Raycastの距離
-[SerializeField] private LayerMask groundMask = Everything except "Domino","Player"; // 地面検出の対象レイヤー。Step 7.1で"Domino"、Step 7.7で"Player"を除外(下記参照)
+[SerializeField] private float groundRaycastRange = 3f;          // 地面検出Raycastの長さ
+[SerializeField] private LayerMask groundMask = Everything except "Domino","Player"; // 地面検出の対象レイヤー。Step 7.1で"Domino"、Step 7.7で"Player"を除外(下記参照。Step 7.8でも維持)
 [SerializeField] private float dominoRestingHeight = 0.5f;       // Real Dominoを生成するY座標(地面からDomino半分の高さ)
+[SerializeField] private float yawRotationSpeed = 135f;          // Step 7.8で追加。Placement Mode中、A/D押しっぱなしでの回転速度(度/秒)
 ```
 
-`dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。Step 7.1で追加した`previewFollowSpeed`(Player向きの急な変化を減速させる仕組み)は、Anchorの基準が下記の通りCamera Aimへ変わったことで不要になったため、Step 7.7で削除しました。
+`dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。Step 7.7で追加した`maxPlacementRange`/`cameraAimRange`(Camera Aim方式専用のRange Clamp・Raycast距離)、および画面中央のReticle(`OnGUI()`)は、Character正面基準へ戻したことで不要になったため、Step 7.8で削除しました。
 
-### Camera Aim + Range Clamp(Step 7.7)
+### Character正面基準のAnchor計算(Step 7.8。Step 4〜7.1と同じ考え方に回帰)
 
-`ComputeGroundAnchor()`は、Playerの向きではなく**Camera(画面中央)から前方へのRaycast**を使うように再設計しました。
+`ComputeGroundAnchor()`は、Camera(画面中央)ではなく**再びPlayer自身の向き**を使います。
 
 ```csharp
-Camera cam = ThirdPersonCamera.Instance.GetComponent<Camera>();
-Vector3 rayOrigin = cam.transform.position;
-Vector3 rayDirection = cam.transform.forward;
-
-// 1. 画面中央のRaycastでStage Surface上の狙い位置を検出(groundMaskはDomino/Playerを除外)
-Physics.Raycast(rayOrigin, rayDirection, out RaycastHit aimHit, cameraAimRange, groundMask, ...);
-
-// 2. Player中心からの水平距離がmaxPlacementRangeを超えていたら、その方向へ最大距離までClamp
-Vector3 flatOffset = ...; // aimPoint - Player位置(Y除く)
-if (flatOffset.magnitude > maxPlacementRange) flatOffset = flatOffset.normalized * maxPlacementRange;
-
-// 3. Clamp後のXZ位置で、改めて真下へRaycastし、実際の地面の高さ・傾きを検出
-Physics.Raycast(new Vector3(candidateXZ.x, Player.y + groundRaycastRange, candidateXZ.z), Vector3.down, out RaycastHit vHit, ...);
+Vector3 flatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+Vector3 basePos = transform.position + flatForward * placementDistance;
+// basePosの上方からGround Raycastし、地面の高さ・法線を検出(groundMaskはDomino/Playerを除外)
 ```
 
-**なぜPlayerからの範囲でClampするのか**: 画面奥の遠いStage Surfaceを狙っていても、実際に配置できるのはPlayerの近くだけです(`DominoSpawner.TryPlaceDomino()`が既に持つ距離Validationと矛盾しないようにするため)。`maxPlacementRange`(既定2.7m)は`DominoSpawner.maxPlacementDistance`(既定3m)より意図的に少し小さくしてあります。両者をピッタリ同じ値にすると、Rangeギリギリで確定した直後にPlayerがわずかに動いただけでHost側の距離Validationに弾かれる、という不具合が実際に発生したためです(詳細は`ImplementationStatus.md`のStep 7.7章を参照)。
+Camera(`ThirdPersonCamera`)は一切参照しません。Cameraをどれだけ回しても、Playerの`transform.forward`が変わらない限りAnchorは動きません。Step 7.7で追加した`"Player"` Layer除外(Camera Aimの光線が自分自身のCapsuleに当たるのを防ぐためのもの)は、Player自身がGround Raycastの原点(Playerのやや上方)から真下へ短い距離しか飛ばさない現在の方式でも自己Hitのリスクを避けられるため、そのまま維持しています。
 
-**なぜPlayer LayerもGround検出から除外したのか(Step 7.7)**: Camera Aimの光線は、Third Person Cameraの位置(Playerの後方)からPlayerの方向へ向かって伸びるため、そのままでは自分自身のCapsule Colliderに当たってしまいます。Step 7.1で追加した`"Domino"` Layer除外と同じ考え方で、`"Player"` Layerも新設して`groundMask`から除外しました(Physics Layer Collision MatrixはPlayer↔Domino/Ground/Player同士とも引き続き衝突する設定のままで、Raycastの対象からのみ除外しています)。
+**なぜCharacter/Nose正面を基準に戻したのか(Step 7.8)**: Step 7.7のCamera Aim方式は「狙った場所へ正確に置ける」利点がある一方、「どこに置くか」がCharacterの向きと切り離されてしまい、実際にプレイすると直感的でないという判断がありました。今回、「どこに置くか(Position)」はCharacter正面に固定し、「どの向きに置くか(Yaw)」をPlacement Mode中に自由に操作できるようにすることで、**位置決めと向き決めの操作を分離**しています。
 
-**Marker/Ghost/Real Dominoの向き**: `_anchorFlatRotation`は、Player位置から狙い位置(Clamp後)へ向かう方向を基準にしています。Playerの実際の向きとは無関係に、常に「今狙っている方向」を向きます。
+### Domino Yaw Rotation(Step 7.8で追加)
+
+Placement Mode中、A/Dキーを押している間、Dominoの向き(Yaw)を自由に回転できます。
+
+```csharp
+// Update()のPlacement Mode分岐
+float yawInput = 0f;
+if (Keyboard.current[rotateLeftKey].isPressed) yawInput -= 1f;
+if (Keyboard.current[rotateRightKey].isPressed) yawInput += 1f;
+if (yawInput != 0f)
+{
+    _yawOffsetDegrees += yawInput * yawRotationSpeed * Time.deltaTime;
+    ApplyPlacementRotation();
+}
+```
+
+`_yawOffsetDegrees`は`float`のまま無制限に加算・減算されます(0〜360への正規化や±の角度制限は一切行っていません)。360°を超えても`Quaternion.AngleAxis()`が自動的に扱うため、実用上何周でも回転できます。Placement Mode開始時(`EnterPlacementMode()`)には必ず`_yawOffsetDegrees = 0`にリセットし、その時点の`_anchorFlatRotation`(=Character正面)を`_placementBaseRotation`として記録します。これにより**Initial Yaw = Nose/Character正面**が常に成立します。Confirm・Cancelいずれの場合も`ExitPlacementMode()`で`_yawOffsetDegrees`を再び`0`にリセットするため、次にPlacement Modeへ入った時は必ずCharacter正面から始まります。
+
+A/Dは**Placement Mode中だけ**Yaw回転として扱われます。この間`PlayerMotor.SetMovementEnabled(false)`によりPlayer自身の移動(WASD)は既に無効化されているため、A/Dキーの意味が競合することはありません。
+
+### Wobble Tilt との合成(Step 7.8)
+
+`GhostDomino`は元々、`ResetWobble()`で記録した`_baseRotation`を土台に、毎フレーム`_baseRotation * Quaternion.AngleAxis(wobbleAngle, Vector3.right)`という**ローカル軸基準**のTiltを重ねる設計でした(Step 4)。Step 7.8では、この`_baseRotation`をPlacement Mode中いつでも書き換えられるよう`SetBaseRotation(Quaternion)`を追加しただけで、Wobbleの計算自体(Timer・振幅・軸)には一切手を入れていません。
+
+```csharp
+// GhostDomino.cs
+public void SetBaseRotation(Quaternion baseRotation)
+{
+    _baseRotation = baseRotation;
+}
+```
+
+`PlacementController.ApplyPlacementRotation()`は、A/D入力があるたびに`_placementBaseRotation * Quaternion.AngleAxis(_yawOffsetDegrees, Vector3.up)`を計算し、これを`SetBaseRotation()`でGhostへ渡します。Wobbleの`_timer`(位相)はYaw操作と無関係に回り続けるため、**Yawを変えてもWobbleの動き自体は途切れません**。またTiltが常にGhost自身の(Yaw込みの)`_baseRotation`を軸に計算されるため、Yawを90°回せば、Wobbleが倒す方向もWorld上で自然に90°回って見えます(`tiltAxis = Vector3.right`が指すのはGhostのローカル右方向であり、そのローカル右方向自体がYawによって回転しているため)。
+
+`ApplyPlacementRotation()`は同時に、Lock中のMarkerの**回転だけ**(位置は不変)も同じYaw値へ更新します。これにより、Ghostを見なくても床のMarkerの向きだけで「この方向へ置こうとしている」ことが分かります。Markerの回転にはWobble Tiltを含めていません(Yawだけを示す、安定した表示にするため)。
 
 **Single Source of Truthとしてのアンカー**: Step 6では、Marker/Ghost/Real Dominoの3者が同じ「配置位置の計算結果」を共有するように整理しました。
 
@@ -203,13 +230,14 @@ private bool _markerLocked;  // false=Preview(追従中) / true=Locked(固定)
 |---|---|---|
 | `OnNetworkSpawn()` | ネットワーク上でこのオブジェクトが実体化した直後 | 自分の持ち主でなければ`enabled = false`でコンポーネント自体を無効化(`PlayerMotor`と同じ考え方) |
 | `Update()` | 毎フレーム(Owner のみ) | まず`GameFlowManager.CurrentPhase`が`BUILDING`かどうかを確認。BUILDING中、Placement Mode外かつ`_markerLocked == false`であれば**毎フレーム**`ComputeGroundAnchor()`→`ShowMarker(Preview)`を呼び、Live Previewを常に最新の位置へ更新する(Step 6.1で追加) |
-| `ComputeGroundAnchor()` | Live Preview更新時・右クリック時・Ghost表示時に呼ばれる | Camera Aim(画面中央)のRaycast+Range Clampから`_anchorGroundPosition`等を計算する、位置計算の唯一の実装(Step 7.7で再設計) |
+| `ComputeGroundAnchor()` | Live Preview更新時・右クリック時・Ghost表示時に呼ばれる | Character正面(`transform.forward`)+`placementDistance`のRaycastから`_anchorGroundPosition`等を計算する、位置計算の唯一の実装(Step 7.8でCharacter正面基準へ復帰) |
 | `ShowMarker(MarkerState)` | Live Preview更新時・右クリック時(Step 6.1で追加、旧`UpdateMarker()`を置き換え) | Markerインスタンスをアンカー位置・地面の傾きに合わせて配置し、引数の状態(`Preview`/`Locked`)を`PlacementMarker.SetState()`へ伝える |
-| `EnterPlacementMode()` | `E`キーが押された時 | `_markerLocked`が`false`ならこの瞬間のPreview位置でLock(`ShowMarker(Locked)`)してからPlacement Mode開始。既にLockedならそのままGhostを表示し、`PlayerMotor.SetMovementEnabled(false)`、`ThirdPersonCamera.EnterPlacementView()`を呼ぶ |
-| `ConfirmPlacement()` | Placement Mode中に左クリックされた時 | Ghostの**回転**とアンカーの**水平位置(X/Z)**をそのまま使い、**Y座標だけ**`dominoRestingHeight`基準に再計算した上で`RequestPlacementRpc()`を呼ぶ。その後Placement Modeを終了する |
+| `EnterPlacementMode()` | `E`キーが押された時 | `_markerLocked`が`false`ならこの瞬間のPreview位置でLock(`ShowMarker(Locked)`)してからPlacement Mode開始。`_yawOffsetDegrees`を`0`にリセットし`_placementBaseRotation`を記録(Step 7.8)。既にLockedならそのままGhostを表示し、`PlayerMotor.SetMovementEnabled(false)`、`ThirdPersonCamera.EnterPlacementView()`を呼ぶ |
+| `ApplyPlacementRotation()` | Placement Mode中、A/D入力があった時(Step 7.8で追加) | `_placementBaseRotation * Quaternion.AngleAxis(_yawOffsetDegrees, Vector3.up)`を計算し、Ghostへ`SetBaseRotation()`、LockedなMarkerへ回転のみ反映する |
+| `ConfirmPlacement()` | Placement Mode中に左クリックされた時 | Ghostの**回転(Yaw+Wobble Tilt込み)**とアンカーの**水平位置(X/Z)**をそのまま使い、**Y座標だけ**`dominoRestingHeight`基準に再計算した上で`RequestPlacementRpc()`を呼ぶ。その後Placement Modeを終了する |
 | `RequestPlacementRpc()` | `ConfirmPlacement()`から呼ばれる | `[Rpc(SendTo.Server)]`。Host上で実行され、`DominoSpawner.TryPlaceDomino()`へ処理を委譲する |
 | `CancelPlacement()` | Placement Mode中に`Escape`が押された時 | 何も生成せず、Placement Modeを終了する |
-| `ExitPlacementMode()` | 確定・キャンセル・Phase変化どれからも呼ばれる共通処理 | Ghostを非表示化、Markerも一旦非表示化した上で`_markerLocked = false`にリセット。BUILDINGのままなら**次のフレームから自動的にLive Previewが再開**する(Step 6.1)。`PlayerMotor.SetMovementEnabled(true)`、`ThirdPersonCamera.ExitPlacementView()`を呼ぶ |
+| `ExitPlacementMode()` | 確定・キャンセル・Phase変化どれからも呼ばれる共通処理 | Ghostを非表示化、Markerも一旦非表示化した上で`_markerLocked = false`・`_yawOffsetDegrees = 0`にリセット(Step 7.8)。BUILDINGのままなら**次のフレームから自動的にLive Previewが再開**する(Step 6.1)。`PlayerMotor.SetMovementEnabled(true)`、`ThirdPersonCamera.ExitPlacementView()`を呼ぶ |
 
 **なぜ`ConfirmPlacement()`で角度の補正を一切行わないのか**: これはゲームデザイン上重要な意図的な仕様です。「ほぼ垂直なタイミングで確定すればDominoは立つ」「大きく傾いたタイミングで確定すればDominoはすぐに倒れる」という、プレイヤーの操作タイミングがそのまま結果に直結する緊張感を作るための設計です。コード上も`_ghostDomino.CurrentRotation`(Ghostの現在の`transform.rotation`をそのまま返すだけのプロパティ)を寸分の加工もなくRPCの引数に渡しています。
 
@@ -219,39 +247,25 @@ private bool _markerLocked;  // false=Preview(追従中) / true=Locked(固定)
 
 **なぜLive Previewを追加したのか(Step 6.1)**: Step 6時点では、右クリックするまでMarkerが一切表示されず、「実際に押してみるまでどこに置かれるか分からない」という操作感の課題がありました。Dominoを何十個・何百個と置くゲームであるため、この「置く前に確認できない」という小さなストレスが積み重なりやすいという指摘を受け、Preview(常時追従・薄い表示)とLocked(固定・やや濃い表示)の2状態に分けることで、「歩きながら位置を合わせる→右クリックで確定→Eで配置」という自然な操作フローを実現しました。
 
-**Performance上の配慮**: Live Previewは毎フレームRaycastを行いますが(Step 7.7でCamera Aim用・地面高さ検出用の2回に増加)、これは各Player自身のローカル処理であり、Network RPC・NetworkVariable・全Domino検索・他PlayerのMarker更新は一切発生しません。
+**Performance上の配慮**: Live Previewは毎フレームRaycastを1回行いますが、これは各Player自身のローカル処理であり、Network RPC・NetworkVariable・全Domino検索・他PlayerのMarker更新は一切発生しません。
 
-### Screen Center Reticle(Step 7.7で追加)
+**Ground Raycastが設置済みDominoやPlayer自身を拾わないようにしている理由(Step 7.1/7.7で追加、Step 7.8でも維持)**: `groundMask`が既定で「すべてのLayer」を対象にしていた頃、Live Previewの地面検出Raycastが、Ground本体だけでなく**既に設置済みの他のReal Domino**にも当たってしまうケースがありました(Ground/Domino双方とも元々`Default` Layerだったため)。Domino上にRaycastが当たると、Marker/Ghost/確定位置のY座標がDomino1個分の高さ(約1m)分だけ浮いてしまいます。この問題を解消するため、`Domino.prefab`専用の`"Domino"` Layer(Step 7.1)、`Player.prefab`専用の`"Player"` Layer(Step 7.7、Camera Aim方式での自己Hit対策として追加)をそれぞれ`PlacementController.groundMask`から除外しました。Step 7.8でCharacter正面基準へ戻した後も、この2つのLayer除外設定はそのまま維持しています(Physics Layer Collision Matrix自体は変更しておらず、Domino Physics・Chain Reaction・Player同士の衝突には影響していません。Raycastの対象から除外しているだけです)。
 
-Camera Aimがどこを狙っているか分かりやすいよう、BUILDING中は画面中央に小さな`+`を表示します。`PlacementController.OnGUI()`で`GUI.Label`を1つ描画するだけの、Canvas/UI Toolkitを使わない最小実装です。
-
-```csharp
-private void OnGUI()
-{
-    if (!IsOwner) return;
-    if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING) return;
-    // 画面中央に "+" を描画
-}
-```
-
-`GamePhase.BUILDING`以外(READY/RUNNING/SUCCESS/FAILED)では描画をスキップするため、Reticleは自動的に非表示になります。
-
-**Live Preview Anchorの向き追従を減速させている理由(Step 7.1で追加)**: `PlayerStats.rotationSpeed`は`720度/秒`と非常に高速で、Playerが移動キーを押しながらCameraを大きく回すと、Player自身の体が(Camera相対の移動方向を追いかけて)ほぼ瞬時に向きを変えます。Step 6.1時点の`ComputeGroundAnchor()`は毎フレーム`transform.forward`をそのまま使っていたため、この「体が高速で向きを変える」場面でMarkerがPlayerの周りをぐるぐる回るように見える不具合が実プレイで見つかりました。原因はCamera Transformを直接使っていたことではなく(Anchorの基準は元からPlayer基準のままです)、Playerの体そのものが高速回転するケースで、それを毎フレーム無条件に反映していたことです。修正として、Playerの生の`transform.forward`とは別に`_previewForward`という減速版の方向ベクトルを持たせ、`Vector3.RotateTowards()`で`previewFollowSpeed`(既定240度/秒、Player本体の720度/秒よりあえて遅く設定)を上限に追従させるようにしました。Lock/Cancel/Confirm/Phase変化でLive Previewが再開する瞬間だけは`_previewForwardValid`をリセットし、その場でPlayerの実際の向きへ即座に一致させます(再開直後に「古い方向から追いつく」ような不自然な動きが出ないようにするため)。
-
-**Ground Raycastが設置済みDominoを拾わないようにした理由(Step 7.1で追加)**: 同じ不具合調査の過程で、`groundMask`が既定で「すべてのLayer」を対象にしていたため、Live Previewの地面検出Raycastが、Ground本体だけでなく**既に設置済みの他のReal Domino**にも当たってしまうケースがあることが分かりました(Ground/Domino双方とも元々`Default` Layerだったため)。Domino上にRaycastが当たると、Marker/Ghost/確定位置のY座標がDomino1個分の高さ(約1m)分だけ浮いてしまいます。この問題を解消するため、`Domino.prefab`専用の新しいUnity Layer `"Domino"`を追加し、`PlacementController.groundMask`から明示的に除外しました(Physics Layer Collision Matrix上は`Domino`↔`Domino`・`Domino`↔`Default`とも引き続き衝突する設定のままなので、Domino Physics・Chain Reactionの挙動には影響していません。Raycastの対象から除外しただけです)。
-
-### PlacementMarker(`PlacementMarker.prefab`、通常の`MonoBehaviour`、Step 6で追加、Step 6.1でState対応)
+### PlacementMarker(`PlacementMarker.prefab`、通常の`MonoBehaviour`、Step 6で追加、Step 6.1でState対応、Step 7.8でDomino Footprint形状化)
 
 ```csharp
 public enum MarkerState { Preview, Locked }
 
-[SerializeField] private float size = 0.6f;                      // 円盤の直径
+[SerializeField] private float width = 0.45f;                    // Step 7.8で追加。Local X(Domino幅0.35+余裕)
+[SerializeField] private float depth = 0.25f;                    // Step 7.8で追加。Local Z(Domino奥行0.15+余裕、Chain方向)
 [SerializeField] private float groundOffset = 0.02f;             // 床からのZ-fighting回避オフセット
 [SerializeField, Range(0f, 1f)] private float previewOpacity = 0.2f;   // Preview時の不透明度(Step 6.1)
 [SerializeField, Range(0f, 1f)] private float lockedOpacity = 0.45f;   // Locked時の不透明度(Step 6.1)
 ```
 
-`Awake()`でサイズを反映し、`MeshRenderer.material`のインスタンスを1度だけキャッシュします。`SetState(MarkerState)`が呼ばれるたびに、そのインスタンスの`Color.a`を`previewOpacity`/`lockedOpacity`のどちらかへ切り替えるだけの、ごく単純な見た目専用コンポーネントです。位置・回転の計算は一切行わず、`PlacementController`から`SetPositionAndRotation()`で外部から動かされるだけの存在です。`GhostDomino`と同じく`NetworkObject`を持たない完全ローカルオブジェクトで、床の傾き(Ground Normal)に応じて`Quaternion.FromToRotation(Vector3.up, groundNormal)`で軽く傾くようになっていますが、本格的な傾斜地対応(Slope Placement)はStep 6の対象外です。
+`Awake()`でサイズを反映し、`MeshRenderer.material`のインスタンスを1度だけキャッシュします。`SetState(MarkerState)`が呼ばれるたびに、そのインスタンスの`Color.a`を`previewOpacity`/`lockedOpacity`のどちらかへ切り替えるだけの、ごく単純な見た目専用コンポーネントです。位置・回転の計算は一切行わず、`PlacementController`から`SetPositionAndRotation()`(Preview追従時)または回転のみの更新(`ApplyPlacementRotation()`、Step 7.8のYaw操作時)で外部から動かされるだけの存在です。`GhostDomino`と同じく`NetworkObject`を持たない完全ローカルオブジェクトで、床の傾き(Ground Normal)に応じて`Quaternion.FromToRotation(Vector3.up, groundNormal)`で軽く傾くようになっていますが、本格的な傾斜地対応(Slope Placement)はStep 6の対象外です。
+
+**Step 7.8で円形(Cylinder)から薄い長方形(Cube)へ形状変更**: Yaw回転で向きを自由に変えられるようになったため、円形のMarkerでは「今どちらを向けて置こうとしているか」が視覚的に分かりませんでした。Prefab自体のMeshを`Cylinder`から`Cube`へ差し替え、`localScale`を`(width, 薄いY, depth)`とすることで、実際のDomino(Width 0.35 × Depth 0.15)に近いFootprintの、向きが一目で分かる長方形にしています。視認性のため、実寸より一回り大きい既定値(Width 0.45 / Depth 0.25)にしてあります。
 
 Preview用・Locked用に別々のPrefabは作らず、同じ`PlacementMarker.prefab`のVisual State(Materialのalpha値)を切り替える構成にしています。
 

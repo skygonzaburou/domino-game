@@ -13,21 +13,24 @@ namespace Domino.Player
         [Header("Input")]
         [SerializeField] private Key enterPlacementKey = Key.E;
         [SerializeField] private Key cancelKey = Key.Escape;
+        [SerializeField] private Key rotateLeftKey = Key.A;
+        [SerializeField] private Key rotateRightKey = Key.D;
 
         [Header("References")]
         [SerializeField] private GameObject ghostDominoPrefab;
         [SerializeField] private GameObject placementMarkerPrefab;
 
-        [Header("Placement Position (Step 7.7: Camera Aim基準)")]
-        [Tooltip("Player中心からの水平距離で、実際に配置できる範囲(DominoSpawnerの距離Validationと一致させること)")]
-        [SerializeField] private float maxPlacementRange = 3f;
+        [Header("Placement Position (Step 7.8: Character正面基準)")]
+        [Tooltip("Character(Nose)正面、何m先に配置候補位置を出すか")]
+        [SerializeField] private float placementDistance = 1.2f;
         [SerializeField] private float hoverHeight = 0.15f;
-        [Tooltip("画面中央のCamera Aim Raycastの最大距離(奥のStage Surfaceを検出するため)")]
-        [SerializeField] private float cameraAimRange = 50f;
-        [Tooltip("Range Clamp後のXZ位置で、地面の高さ・傾きを再検出する垂直Raycastの距離")]
         [SerializeField] private float groundRaycastRange = 3f;
         [SerializeField] private LayerMask groundMask = ~0;
         [SerializeField] private float dominoRestingHeight = 0.5f;
+
+        [Header("Domino Yaw Rotation (Step 7.8)")]
+        [Tooltip("Placement Mode中、A/Dキーを押し続けた時のDomino回転速度(度/秒)")]
+        [SerializeField] private float yawRotationSpeed = 135f;
 
         private PlayerMotor _motor;
         private GameObject _ghostInstance;
@@ -37,7 +40,13 @@ namespace Domino.Player
         private bool _isPlacing;
         private bool _markerActive;
         private bool _markerLocked;
-        private GUIStyle _reticleStyle;
+
+        // Yaw adjustment applied on top of _placementBaseRotation while in Placement Mode.
+        // Reset to 0 every time Placement Mode is (re-)entered, so Yaw always starts aligned
+        // with the Character/Nose facing direction at that moment (spec: Initial Yaw = Nose
+        // Forward), and never carries over between separate placements.
+        private float _yawOffsetDegrees;
+        private Quaternion _placementBaseRotation;
 
         // Single source of truth for where a Domino would go: computed once by
         // ComputeGroundAnchor()/EnterPlacementMode(), then reused as-is by the Marker, the
@@ -76,7 +85,7 @@ namespace Domino.Player
             if (!_isPlacing)
             {
                 // Live Preview: as long as the marker isn't locked, it continuously
-                // follows the current Camera Aim every frame.
+                // follows the Character's current front-facing candidate every frame.
                 if (!_markerLocked)
                 {
                     ComputeGroundAnchor();
@@ -87,7 +96,7 @@ namespace Domino.Player
                 if (mouse != null && mouse.rightButton.wasPressedThisFrame)
                 {
                     // Always recompute so a second Right Click re-locks to the
-                    // current Camera Aim position rather than the old locked one.
+                    // current live position rather than the old locked one.
                     ComputeGroundAnchor();
                     _markerLocked = true;
                     ShowMarker(MarkerState.Locked);
@@ -98,6 +107,20 @@ namespace Domino.Player
                     EnterPlacementMode();
                 }
                 return;
+            }
+
+            // Placement Mode: A/D freely rotate the Domino's Yaw (Player movement is already
+            // disabled here via _motor.SetMovementEnabled(false), so A/D are unambiguous).
+            if (Keyboard.current != null)
+            {
+                float yawInput = 0f;
+                if (Keyboard.current[rotateLeftKey].isPressed) yawInput -= 1f;
+                if (Keyboard.current[rotateRightKey].isPressed) yawInput += 1f;
+                if (yawInput != 0f)
+                {
+                    _yawOffsetDegrees += yawInput * yawRotationSpeed * Time.deltaTime;
+                    ApplyPlacementRotation();
+                }
             }
 
             var m = Mouse.current;
@@ -113,46 +136,30 @@ namespace Domino.Player
             }
         }
 
-        // Screen-center ("Camera Aim") raycast against the Stage Surface, range-clamped around
-        // the Player so aiming far away never proposes a spot DominoSpawner's own distance
-        // Validation would reject. groundMask excludes the Domino and Player Layers (Step 7.1/
-        // 7.7) so already-placed Dominoes and Player bodies are never mistaken for ground.
+        // Character-front raycast: Player Position + Player Forward * placementDistance, then
+        // straight down to the Stage Surface. Camera orientation is never consulted here -
+        // only where the Character/Nose is facing decides the candidate position (Step 7.8;
+        // supersedes Step 7.7's Camera Aim approach). groundMask excludes the Domino and
+        // Player Layers (Step 7.1/7.7) so already-placed Dominoes and Player bodies are never
+        // mistaken for ground.
         private void ComputeGroundAnchor()
         {
-            Camera cam = ThirdPersonCamera.Instance != null ? ThirdPersonCamera.Instance.GetComponent<Camera>() : null;
-            Vector3 rayOrigin = cam != null ? cam.transform.position : transform.position + Vector3.up * 1.5f;
-            Vector3 rayDirection = (cam != null ? cam.transform.forward : transform.forward).normalized;
+            Vector3 flatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+            if (flatForward.sqrMagnitude < 0.0001f) flatForward = Vector3.forward;
 
-            Vector3 aimPoint;
-            if (Physics.Raycast(rayOrigin, rayDirection, out RaycastHit aimHit, cameraAimRange, groundMask, QueryTriggerInteraction.Ignore))
-            {
-                aimPoint = aimHit.point;
-            }
-            else
-            {
-                aimPoint = rayOrigin + rayDirection * cameraAimRange;
-            }
-
-            Vector3 flatOffset = new Vector3(aimPoint.x - transform.position.x, 0f, aimPoint.z - transform.position.z);
-            if (flatOffset.magnitude > maxPlacementRange)
-            {
-                flatOffset = flatOffset.normalized * maxPlacementRange;
-            }
-            Vector3 candidateXZ = transform.position + flatOffset;
-
+            Vector3 basePos = transform.position + flatForward * placementDistance;
             float groundY = transform.position.y;
             Vector3 groundNormal = Vector3.up;
-            Vector3 verticalOrigin = new Vector3(candidateXZ.x, transform.position.y + groundRaycastRange, candidateXZ.z);
-            if (Physics.Raycast(verticalOrigin, Vector3.down, out RaycastHit vHit, groundRaycastRange * 2f, groundMask, QueryTriggerInteraction.Ignore))
+
+            Vector3 rayOrigin = basePos + Vector3.up * groundRaycastRange * 0.5f;
+            if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, groundRaycastRange, groundMask, QueryTriggerInteraction.Ignore))
             {
-                groundY = vHit.point.y;
-                groundNormal = vHit.normal;
+                groundY = hit.point.y;
+                groundNormal = hit.normal;
             }
 
-            Vector3 facing = flatOffset.sqrMagnitude > 0.0001f ? flatOffset.normalized : transform.forward;
-
-            _anchorGroundPosition = new Vector3(candidateXZ.x, groundY, candidateXZ.z);
-            _anchorFlatRotation = Quaternion.LookRotation(facing, Vector3.up);
+            _anchorGroundPosition = new Vector3(basePos.x, groundY, basePos.z);
+            _anchorFlatRotation = Quaternion.LookRotation(flatForward, Vector3.up);
             _anchorGroundNormal = groundNormal;
         }
 
@@ -164,6 +171,22 @@ namespace Domino.Player
             _markerInstance.SetActive(true);
             _markerActive = true;
             if (_placementMarker != null) _placementMarker.SetState(state);
+        }
+
+        // Applies the current Yaw-adjusted rotation to both the Ghost (via SetBaseRotation,
+        // so its own Wobble keeps animating on top around the now-rotated local axis) and the
+        // locked Marker (position untouched, rotation only) - "Markerも同じYawへ回転".
+        private void ApplyPlacementRotation()
+        {
+            Quaternion currentRotation = _placementBaseRotation * Quaternion.AngleAxis(_yawOffsetDegrees, Vector3.up);
+
+            if (_ghostDomino != null) _ghostDomino.SetBaseRotation(currentRotation);
+
+            if (_markerInstance != null)
+            {
+                Quaternion slopeAlign = Quaternion.FromToRotation(Vector3.up, _anchorGroundNormal);
+                _markerInstance.transform.rotation = slopeAlign * currentRotation;
+            }
         }
 
         private void EnsureMarkerInstance()
@@ -180,46 +203,25 @@ namespace Domino.Player
             _markerActive = false;
         }
 
-        // Simple screen-center Reticle so the Player can see where Camera Aim is pointing
-        // before locking a Marker there. Deliberately not a Canvas/UI Toolkit element - a
-        // single OnGUI() label is enough for this Prototype and needs no scene setup.
-        private void OnGUI()
-        {
-            if (!IsOwner) return;
-            if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING) return;
-
-            if (_reticleStyle == null)
-            {
-                _reticleStyle = new GUIStyle
-                {
-                    fontSize = 20,
-                    alignment = TextAnchor.MiddleCenter,
-                    normal = { textColor = Color.white }
-                };
-            }
-
-            float cx = Screen.width * 0.5f;
-            float cy = Screen.height * 0.5f;
-            GUI.Label(new Rect(cx - 10f, cy - 12f, 20f, 24f), "+", _reticleStyle);
-        }
-
         private void EnterPlacementMode()
         {
             if (!_markerLocked)
             {
-                // Bare E with no prior Right Click: lock to whatever the Camera Aim
-                // was showing this frame (already computed above).
+                // Bare E with no prior Right Click: lock to whatever the Live
+                // Preview was showing this frame (already computed above).
                 _markerLocked = true;
                 ShowMarker(MarkerState.Locked);
             }
 
             _isPlacing = true;
+            _yawOffsetDegrees = 0f;
+            _placementBaseRotation = _anchorFlatRotation;
             _motor.SetMovementEnabled(false);
 
             Vector3 spawnPosition = _anchorGroundPosition + Vector3.up * hoverHeight;
 
             EnsureGhostInstance();
-            _ghostInstance.transform.SetPositionAndRotation(spawnPosition, _anchorFlatRotation);
+            _ghostInstance.transform.SetPositionAndRotation(spawnPosition, _placementBaseRotation);
             _ghostInstance.SetActive(true);
             _ghostDomino.ResetWobble();
 
@@ -242,8 +244,10 @@ namespace Domino.Player
         {
             // Ghost/Marker Y is the wobble pivot height (hoverHeight above ground), not a
             // physically correct resting height for a real Domino. Use the anchor's ground
-            // Y plus the Domino's own resting height instead - this only affects Y; X/Z and
-            // rotation are still used exactly as-is, so "no angle correction" is untouched.
+            // Y plus the Domino's own resting height instead - this only affects Y; X/Z are
+            // still used exactly as-is. Rotation (Yaw + Wobble Tilt) is taken from the Ghost's
+            // current rotation with no correction whatsoever, preserving the Step 5 design
+            // that placement timing/orientation directly determines the result.
             Vector3 position = new Vector3(_anchorGroundPosition.x, _anchorGroundPosition.y + dominoRestingHeight, _anchorGroundPosition.z);
             Quaternion rotation = _ghostDomino.CurrentRotation;
 
@@ -267,13 +271,14 @@ namespace Domino.Player
         private void ExitPlacementMode()
         {
             _isPlacing = false;
+            _yawOffsetDegrees = 0f;
             if (_ghostInstance != null)
             {
                 _ghostInstance.SetActive(false);
             }
             HideMarker();
             // Unlock so, if still BUILDING, next frame's Update() immediately
-            // resumes following Camera Aim again.
+            // resumes following the Character's front-facing position again.
             _markerLocked = false;
             _motor.SetMovementEnabled(true);
 
