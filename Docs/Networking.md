@@ -121,7 +121,7 @@ graph TD
         direction LR
         O1[操作している本人のPC] -->|自分で計算して正解を決める| O2[他の全PCへ結果を配信]
     end
-    subgraph "Host Authority (将来Dominoに採用予定)"
+    subgraph "Host Authority (Step 5でDominoに採用)"
         direction LR
         D1[各Client] -->|要求だけ送る| D2[HostのPCが計算]
         D2 -->|計算結果を正解として配信| D1
@@ -136,7 +136,10 @@ Playerの移動は **Owner Authority** を採用しています。理由は次�
 - Host Authorityにすると、移動のたびにClientがHostへ「動きたい」という要求を送り、Hostが計算した結果が返ってくるまで反映を待つ(または予測してあとで補正する)処理が必要になり、実装が複雑になる
 - Owner Authorityなら、自分のPC上でRigidbodyを動かした結果がそのまま正解になるため、操作した瞬間に画面に反映され、動きが機敏に感じられる
 
-ただし、この方針には注意点があります。GameDesign.md 14節にある通り、将来実装するDomino(倒れる物理演算)は **Host Authority** で統一する設計です。「Owner AuthorityのPlayer」と「Host AuthorityのDomino」が物理的に衝突したときに正しく振る舞うよう、`NetworkRigidbody` の設定(第7章)を先回りして入れてありますが、**これはあくまで設計上の備えであり、実際にDominoを実装してHost/Client環境で衝突させてみるまでは「問題ないと確定した」わけではありません。** Domino実装時に必ず実機(複数プロセス)で検証してください。
+この方針には最初から注意点がありました。GameDesign.md 14節にある通り、Domino(倒れる物理演算)は **Host Authority** で統一する設計であり、「Owner AuthorityのPlayer」と「Host AuthorityのDomino」が物理的に衝突したときに正しく振る舞うよう、`NetworkRigidbody` の設定(第7章)を先回りして入れてありました。Step 5でDominoを実際にNetwork化した結果は以下の通りです。
+
+- **HostのPlayer(Owner Authority) → Host Authority Dominoの衝突**: 実機(Play Mode)で確認済み。HostのPlayerがNetwork化されたDominoに歩いて接触すると正しく倒れ、その結果がClient側にも同期されることを確認しました
+- **ClientのPlayer(Owner Authority) → Host Authority Dominoの衝突**: **Step 5終了時点で未確認です。** これはツール側の制約(MPPMの仮想Playerウィンドウへキーボード入力を自動送信できなかったため、Client自身を歩かせる操作を自動テストできなかった)によるものであり、コードや設計上の既知の問題が見つかったわけではありません。詳細と根拠は `ImplementationStatus.md` のStep 5章を参照してください。**開発者ご自身での実機確認を推奨します。**
 
 ---
 
@@ -261,3 +264,78 @@ private void Start()
 - 現状は `127.0.0.1`(自分自身のPC)への接続にしか使っていないため、番号自体に深い意味はなく、8000番でも9000番でも動作上は問題ありません。
 - 7777番のソケットは、Unity Editorを再起動すれば解放されます。7778のままでも実害はないため、現時点では戻す必要はないと判断しています。
 - 将来、実際のインターネット経由の通信(Relay等)に切り替える際には、この固定ポート番号への依存自体がなくなる見込みです(Relayは接続のたびに動的にポート/経路を割り当てる仕組みのため)。
+
+---
+
+## 17. Domino.prefabのNetwork化(Step 5)
+
+Step 5で `Domino.prefab` に `NetworkObject`・`NetworkTransform`・`NetworkRigidbody` を追加し、Playerと同じ仕組みでネットワーク対応させました。Playerとの決定的な違いは **Authorityの向き** です。
+
+| | Player.prefab | Domino.prefab(Step 5〜) |
+|---|---|---|
+| `NetworkTransform.AuthorityMode` | `Owner`(値1) | `Server`(値0) |
+| 正解を決めるのは誰か | 操作している本人(Owner) | 常にHost |
+| 誰の持ち物としてSpawnするか | 接続したClient自身 | 常にHost/Server(`OwnerClientId = 0`) |
+| Host以外のPC上のRigidbody | 自分がOwnerなら通常物理演算、そうでなければKinematic | **常にKinematic**(HostだけがOwnerかつAuthorityを持つため) |
+
+`NetworkRigidbody` の `AutoUpdateKinematicState` / `UseRigidBodyForMotion` の仕組み自体は第7章で説明したものと全く同じです。Domino側では常に「HostだけがDynamic、それ以外は全員Kinematic」という状態になる点だけがPlayerと異なります。これにより、Domino物理演算を実際に計算しているのはHostだけであり、ClientはHostから届いた位置・回転を`MovePosition`/`MoveRotation`で反映しているだけ、という状態が保証されます(実機確認結果は`ImplementationStatus.md`のStep 5章を参照)。
+
+---
+
+## 18. Placement Request(Domino配置の要求)の通信フロー
+
+Step 4まではConfirm(左クリック)した瞬間にClient自身がローカルで`Instantiate()`していましたが、Step 5でこれを廃止し、「ConfirmしたClientはHostへ配置を"お願い"するだけで、実際にDominoを生み出すのは常にHost」という流れに変更しました。
+
+```mermaid
+sequenceDiagram
+    participant GhostLocal as Ghost Domino (Client/HostのLocal専用)
+    participant PC as PlacementController (Confirmした側)
+    participant Net as ネットワーク経由
+    participant PC_Host as PlacementController (Host上のRPC実行コンテキスト)
+    participant Spawner as DominoSpawner (Hostのみ)
+    participant Domino as Domino.prefab (Host AuthorityでSpawn)
+
+    GhostLocal->>PC: 左クリック時点のPosition/Rotationを取得(無補正)
+    PC->>PC: Ghost非表示化・Placement Mode終了(Local UXは即座に元へ戻る)
+    PC->>Net: RequestPlacementRpc(position, rotation) を送信
+    Net->>PC_Host: Hostでこのメソッドが実行される
+    PC_Host->>Spawner: TryPlaceDomino(position, rotation, senderClientId)
+    Spawner->>Spawner: 送信者確認・NaN/Infinity確認・距離確認
+    alt Validation成功
+        Spawner->>Domino: NetworkObject.InstantiateAndSpawn(...)
+        Domino->>Net: Spawnメッセージが全Clientへ配信される
+    else Validation失敗
+        Spawner->>Spawner: Debug.LogWarningのみ、Spawnしない
+    end
+```
+
+**なぜGhostを表示したまま応答を待たないのか**: Step 4から変更していないUX方針として、「ConfirmしたらすぐPlacement Modeを終了し、Third Person Cameraへ戻ってPlayerが動けるようにする」ことを優先しています。Hostからの応答(実際のDomino表示)は、その直後か少し遅れて自然に画面に現れる形で構わないという判断です。将来的にRTT(往復遅延)が大きい環境で「配置したはずなのに一瞬何も見えない」という違和感が問題になった場合は、Client側だけの仮表示(Client Prediction)を検討する余地がありますが、Step 5では意図的に実装していません。
+
+### 使用したRPC API
+
+NGO 2.13.2で導入されている、`ServerRpc`/`ClientRpc`を統合した新しいRPC属性を使用しています。
+
+```csharp
+[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+private void RequestPlacementRpc(Vector3 position, Quaternion rotation, RpcParams rpcParams = default)
+{
+    ulong senderClientId = rpcParams.Receive.SenderClientId;
+    DominoSpawner.Instance.TryPlaceDomino(position, rotation, senderClientId);
+}
+```
+
+- `SendTo.Server`: 「このメソッドは呼び出し元がClientでもHostでも、必ずServer(Host)上で実行される」ことを表す宛先指定です。古い`[ServerRpc]`属性に相当します
+- `InvokePermission = RpcInvokePermission.Owner`: このRPCを実際に呼び出せるのは、そのNetworkObjectの持ち主(Owner)だけに制限しています。これにより「他人のPlayerに紐づくPlacementControllerを勝手に呼び出す」ことをNGO自身のレベルで防いでいます(`PlacementController`はPlayer.prefabに付いており、各Playerの持ち主は自分自身のPlacementControllerしか実質操作できない構造とあわせて二重の保護になっています)
+- `RpcParams rpcParams = default`: 引数の最後にこの型を追加すると、NGOが自動的に「誰がこのRPCを送ってきたか」の情報を渡してくれます。`rpcParams.Receive.SenderClientId` で送信者のClient IDを取得しています
+
+---
+
+## 19. Placement Requestの検証(Validation)
+
+Hostは、Clientから送られてきたPosition/Rotationを無条件には信用しません。`DominoSpawner.TryPlaceDomino()` が以下の3点を確認し、いずれか1つでも失敗すれば配置を拒否します(Spawnせず、理由をConsoleにWarning出力するだけで終了)。
+
+1. **送信者確認**: `senderClientId` が現在接続中のClientであり、かつその接続にPlayerObjectが存在すること(`NetworkManager.ConnectedClients`を参照)
+2. **数値確認**: Position/RotationにNaN・Infinityが含まれていないこと
+3. **距離確認**: 配置しようとしている位置が、その送信者自身のPlayerの現在位置から`maxPlacementDistance`(既定3m、Inspectorで調整可能)以内であること。Ghostは通常Player前方1.2m程度に表示されるため、3mは通信遅延等のマージンを見込んだ値です
+
+これはあくまでMVP水準のValidationであり、本格的なAnti-Cheatではありません(GameDesign.mdの将来仕様にも本格的なAnti-Cheatは含まれていません)。あくまで「明らかにおかしい要求を弾く」ことが目的です。

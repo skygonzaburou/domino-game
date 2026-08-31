@@ -118,9 +118,9 @@ Netcode for GameObjectsが「このGameObjectはネットワークで管理す�
 
 ---
 
-## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加)
+## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応)
 
-Step 4で、Playerが実際にDominoを配置するための`PlacementController`と`GhostDomino`を追加しました。ネットワーク的にはStep 4時点でまだ何も同期しておらず(Ghost/確定後のReal Dominoともに`NetworkObject`を持たない)、**各Playerのローカル画面だけで完結する機能**です。
+Step 4で、Playerが実際にDominoを配置するための`PlacementController`と`GhostDomino`を追加しました。Ghostは今も`NetworkObject`を持たない**各Playerのローカル画面だけで完結する機能**のままですが、Step 5で確定後のReal Dominoの生成方法が「ローカルInstantiate」から「HostへのRPCリクエスト」に変わりました(詳細は本章末とNetworking.mdの第17〜19章を参照)。
 
 ### PlacementController(`Player.prefab`に追加、`NetworkBehaviour`)
 
@@ -128,13 +128,15 @@ Step 4で、Playerが実際にDominoを配置するための`PlacementController
 ```csharp
 [SerializeField] private Key enterPlacementKey = Key.E;        // Placement Mode開始キー
 [SerializeField] private Key cancelKey = Key.Escape;            // キャンセルキー(右クリックも別途対応)
-[SerializeField] private GameObject dominoPrefab;                // 確定時に生成するReal Domino
 [SerializeField] private GameObject ghostDominoPrefab;           // Ghost Dominoの元プレハブ
 [SerializeField] private float forwardDistance = 1.2f;           // Player前方何mにGhostを出すか
-[SerializeField] private float hoverHeight = 0.15f;              // 地面から何m浮かせるか
+[SerializeField] private float hoverHeight = 0.15f;              // Ghostの首振りピボットを地面から何m浮かせるか(あくまでGhostの見た目用)
 [SerializeField] private float groundRaycastRange = 3f;          // 地面検出Raycastの長さ
 [SerializeField] private LayerMask groundMask = ~0;              // 地面検出の対象レイヤー
+[SerializeField] private float dominoRestingHeight = 0.5f;       // Step 5で追加。Real Dominoを生成するY座標(地面からDomino半分の高さ)
 ```
+
+`dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。
 
 主なMethod:
 | Method | 呼ばれるタイミング | やっていること |
@@ -142,11 +144,14 @@ Step 4で、Playerが実際にDominoを配置するための`PlacementController
 | `OnNetworkSpawn()` | ネットワーク上でこのオブジェクトが実体化した直後 | 自分の持ち主でなければ`enabled = false`でコンポーネント自体を無効化(`PlayerMotor`と同じ考え方) |
 | `Update()` | 毎フレーム(Owner のみ) | Placement Mode中かどうかで分岐し、該当するキー/マウス入力を判定する |
 | `EnterPlacementMode()` | `E`キーが押された時 | Player前方・地面ぎりぎり上のGhost出現位置を計算(下向きRaycastで地面のY座標を検出)、`PlayerMotor.SetMovementEnabled(false)`、`ThirdPersonCamera.EnterPlacementView()`を呼ぶ |
-| `ConfirmPlacement()` | Placement Mode中に左クリックされた時 | **その瞬間のGhostの位置・回転をそのまま**使って`Domino.prefab`を`Instantiate()`し、Placement Modeを終了する |
+| `ConfirmPlacement()` | Placement Mode中に左クリックされた時 | Ghostの**回転**と**水平位置(X/Z)**をそのまま使い、**Y座標だけ**`dominoRestingHeight`基準に再計算した上で`RequestPlacementRpc()`を呼ぶ(Step 5で変更。理由は下記)。その後Placement Modeを終了する |
+| `RequestPlacementRpc()` | `ConfirmPlacement()`から呼ばれる(Step 5で追加) | `[Rpc(SendTo.Server)]`。Host上で実行され、`DominoSpawner.TryPlaceDomino()`へ処理を委譲する |
 | `CancelPlacement()` | Placement Mode中に右クリックまたは`Escape`が押された時 | 何も生成せず、Placement Modeを終了する |
 | `ExitPlacementMode()` | 確定・キャンセルどちらからも呼ばれる共通処理 | Ghostを非表示化(`Destroy`ではなく使い回すために`SetActive(false)`)、`PlayerMotor.SetMovementEnabled(true)`、`ThirdPersonCamera.ExitPlacementView()`を呼ぶ |
 
-**なぜ`ConfirmPlacement()`で角度の補正を一切行わないのか**: これはゲームデザイン上重要な意図的な仕様です。「ほぼ垂直なタイミングで確定すればDominoは立つ」「大きく傾いたタイミングで確定すればDominoはすぐに倒れる」という、プレイヤーの操作タイミングがそのまま結果に直結する緊張感を作るための設計です。コード上も`_ghostDomino.CurrentRotation`(Ghostの現在の`transform.rotation`をそのまま返すだけのプロパティ)を寸分の加工もなく`Instantiate()`に渡しています。
+**なぜ`ConfirmPlacement()`で角度の補正を一切行わないのか**: これはゲームデザイン上重要な意図的な仕様です。「ほぼ垂直なタイミングで確定すればDominoは立つ」「大きく傾いたタイミングで確定すればDominoはすぐに倒れる」という、プレイヤーの操作タイミングがそのまま結果に直結する緊張感を作るための設計です。コード上も`_ghostDomino.CurrentRotation`(Ghostの現在の`transform.rotation`をそのまま返すだけのプロパティ)を寸分の加工もなくRPCの引数に渡しています。
+
+**なぜY座標だけはGhostの値をそのまま使わないのか(Step 5で発見・修正)**: `hoverHeight`はGhostが**メトロノームのように首を振るための支点の高さ**であり、Real Dominoが物理的に正しく直立するための高さとは意味が異なります。Step 4ではこの2つを区別せず、Ghostの位置をそのままReal Dominoの生成位置に使っていたため、Real Dominoが地面に約35cm埋まった状態でSpawnしていました。ほとんどの場合は埋まった状態から重力で正しい位置まで落ちるだけで済みましたが、まれにこの「埋まった状態からの押し出され」が原因で、垂直に置いたはずのDominoが倒れてしまうことがあるとStep 5のテスト中に判明しました。回転(角度)は一切補正していない一方で、Y座標だけは「地面ラインを逆算し、Domino半分の高さ(`dominoRestingHeight`)を足す」という形で、Real Dominoが正しく地面に接する状態で生成されるようにしています。X/Z座標(水平位置)と回転は今まで通りGhostの値をそのまま使っています。
 
 ### GhostDomino(`GhostDomino.prefab`、通常の`MonoBehaviour`)
 
@@ -169,6 +174,7 @@ sequenceDiagram
     participant PM as PlayerMotor
     participant Cam as ThirdPersonCamera
     participant GD as GhostDomino
+    participant Host as Host (DominoSpawner)
 
     Kb->>PC: Eキーが押された
     PC->>PM: SetMovementEnabled(false)
@@ -178,14 +184,16 @@ sequenceDiagram
     Note over GD: 以後、GDが毎フレーム自律的に首を振り続ける
 
     Kb->>PC: 左クリック(確定)
-    PC->>PC: Ghostの「今の」position/rotationを取得
-    PC->>PC: Domino.prefabをInstantiate(取得した値そのまま)
+    PC->>PC: Ghostの「今の」rotationと水平位置を取得、Yだけ再計算
+    PC->>Host: RequestPlacementRpc(position, rotation) を送信
     PC->>PM: SetMovementEnabled(true)
     PC->>Cam: ExitPlacementView()
-    Note over PC: 生成されたReal DominoはRigidbody/Gravity/Colliderが即座に有効
+    Note over PC: この時点でLocal側のPlacement Modeはもう終了している
+    Host->>Host: Validation → NetworkObject.InstantiateAndSpawn()
+    Note over Host: 生成されたReal Dominoは、Host上ではRigidbody/Gravity/Colliderが即座に有効。<br/>Client側には少し遅れてSpawnメッセージ経由で表示される
 ```
 
-キャンセル(右クリック/Escape)の場合は「Domino.prefabをInstantiateする」行程だけが省略され、それ以外(`SetMovementEnabled(true)`・`ExitPlacementView()`)は確定時と同じ処理が呼ばれます。
+キャンセル(右クリック/Escape)の場合は「RPCを送信する」行程だけが省略され、それ以外(`SetMovementEnabled(true)`・`ExitPlacementView()`)は確定時と同じ処理が呼ばれます。RPC送信後、Local側は**Hostからの返事を待たずに**すぐPlacement Modeを終了する点がポイントです(Step 5でもStep 4のUX方針を維持)。
 
 ---
 

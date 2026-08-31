@@ -1,6 +1,6 @@
 # ImplementationStatus(実装状況の整理)
 
-Step 0〜Step 4について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
+Step 0〜Step 5について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
 
 ---
 
@@ -152,5 +152,45 @@ Step 4でもネットワーク関連の設定・コードには一切手を加�
 - **Client側でのPlacement Mode操作の実機確認**: 開発者ご自身の手元での操作確認をお勧めします(手順はMultiplayerTesting.mdと同様、MPPMでClientをアクティブ化した上でClientウィンドウ側でEキー/クリックを操作するだけです)
 - **`NetworkTransform`付きオブジェクトへの直接`transform.position`代入は反映されない**: デバッグ作業中に判明した挙動で、Rigidbodyの物理演算側の位置が優先され、直接代入した値は次のフレームで巻き戻ります。将来リスポーン等でPlayerやDominoの位置を強制的に変更する処理を実装する場合は、必ず`NetworkTransform.Teleport(position, rotation, scale)`を使う必要があります
 - 検証ログに残った2件のConsole警告("Setting linear velocity of a kinematic body is not supported"等)は、検証用の一時的なテストコード(Player位置の強制リセット処理)が原因であり、`PlacementController`/`GhostDomino`/`PlayerMotor`/`ThirdPersonCamera`などの本実装コードからは発生していません
-- Step 5でDominoをNetworkObject化する際、`PlacementController.ConfirmPlacement()`のローカル`Instantiate()`をHost側でのNetwork Spawn呼び出しに置き換える設計変更が必要になります
+- Step 5でDominoをNetworkObject化する際、`PlacementController.ConfirmPlacement()`のローカル`Instantiate()`をHost側でのNetwork Spawn呼び出しに置き換える設計変更が必要になります(→ Step 5で実施)
 - Step 3で確認された「間隔0.5m〜0.7mでの非決定的なChain Reaction」の問題は、プレイヤーが手動で配置する間隔にも同様の影響を与えうるため、Step 5以降で配置間隔の目安をUI等でガイドすることを検討する価値があります
+
+---
+
+## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
+
+Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
+
+### 実装済み
+- `Domino.prefab` に `NetworkObject`・`NetworkTransform`(`AuthorityMode = Server`)・`NetworkRigidbody`(`UseRigidBodyForMotion = true`, `AutoUpdateKinematicState = true`)を追加。Domino同士・Player-Domino用の`BoxCollider`/`Rigidbody`設定(Mass, Damping, PhysicsMaterial等)はStep 3から一切変更していません
+- `DominoSpawner.cs`(新規, `Domino.DominoSystem`名前空間, 通常の`MonoBehaviour`)を作成し、Scene内の`NetworkManager` GameObjectに追加。Host上でのみ、配置要求の検証(送信者確認・NaN/Infinity確認・距離確認)と`NetworkObject.InstantiateAndSpawn()`によるSpawnを担当
+- `PlacementController.cs`を変更: `ConfirmPlacement()`のローカル`Instantiate()`を廃止し、`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]`属性を持つ`RequestPlacementRpc(Vector3, Quaternion, RpcParams)`を新設。ConfirmしたClientはHostへ配置を要求するだけになり、Real Dominoの生成は必ずHostが行う
+- **バグ修正(Step 4由来)**: `ConfirmPlacement()`が、Ghostのメトロノーム首振り用ピボット高さ(`hoverHeight`)をそのままReal Dominoの生成Y座標に使っていたため、Real Dominoが地面に約35cm埋まった状態でSpawnされ、まれに垂直配置でも倒れてしまう不具合を発見・修正しました。詳細は本章末の「重要な発見」を参照
+- `Domino.prefab`をNetwork Prefabとして登録(`DefaultNetworkPrefabs.asset`)。Prefab Stageを一度開いて保存することでNGOの自動登録の仕組みが働き、`GlobalObjectIdHash`の採番も含めて正しく登録されました(Player.prefabと同じ仕組み)
+
+### 動作確認済み
+すべてHost自身のPlayerでの操作をNew Input Systemの`QueueStateEvent`でシミュレートし、Multiplayer Play Modeで実際に接続したClient(Player 2)がいる状態で検証しました。Client側は、専用のUnityMCPブリッジを持たないため`execute_code`による直接確認はできず、Hostから見た`NetworkObject.IsNetworkVisibleTo()`/`GetObservers()`(NGO自身が管理する購読者リスト)による確認と、可能な範囲でのスクリーンショットで確認しています。
+
+- **Host Placement → Client表示**: Hostで配置したDominoが正式な`NetworkObject`としてSpawnし(`OwnerClientId = 0`)、`IsNetworkVisibleTo(clientId)`でClientにも配信されていることを確認
+- **ClientはReal Dominoを直接Local Instantiateしていない**: `PlacementController`のコード上、ローカル`Instantiate()`を完全に削除し、RPC経由のリクエストのみになっていることをコードレベルで確認
+- **DominoはServer/Host Authority**: `NetworkTransform.AuthorityMode = Server`、Host上の`Rigidbody.isKinematic = false`(Dynamic)を確認
+- **Client側DominoはKinematic**: Client(Player 2)から見て非Ownerとなる全てのDominoで、`AutoUpdateKinematicState`によって自動的にKinematic化される設計(Playerと同じ仕組み、第7章参照)。個々のDominoについてClient側から直接`isKinematic`を確認することはできませんでしたが、Host自身のPlayerとClientのPlayer双方についてこの仕組みが正しく機能していることは既にStep 2で実証済みであり、Domino側も同一コンポーネント構成のため同様に機能すると判断しています
+- **垂直配置 → 立つ**: Ghostの回転を厳密に0°に固定した状態で確定し、物理シミュレーション後もDomino が起立したまま静止(角度0.03°〜0.09°程度)することを複数回確認。上記のバグ修正後に確認したものです
+- **傾斜配置 → Host Physicsで倒れ、Clientに同期**: 19°・30°など複数の傾斜角度で確定したDominoが即座に完全に倒れる(垂直角度90°)ことを確認。結果はClient側の観測用購読者リストにも反映されていることを確認
+- **Host Player → Domino衝突**: HostのPlayerを歩かせてNetwork化されたDominoに接触させ、Dominoが倒れて押し出される(位置がpushされる)ことを確認
+- **Client Placement(代理確認)**: Client(Player 2)自身のE/クリック操作によるRPC送信は今回自動化できませんでした(詳細は「未実装/確認できなかった事項」参照)。代わりに、実際に接続しているClient(clientId=1)のPlayerObject位置を基準とした座標を使い、Hostのサーバー処理コード(`DominoSpawner.TryPlaceDomino`)を`senderClientId=1`で直接呼び出す形で検証しました。これにより「HostがClientの要求を受理し、正しいOwnership(Server=0)でSpawnし、Host/Client双方から観測可能になる」という一連の処理を実クライアントの識別子で確認できています
+- **Validation(検証処理)**: 3種類の不正リクエストで正しく拒否されることを確認 — (1)実際のPlayer位置から70m以上離れた位置への配置要求 → 拒否、(2)NaN値を含む座標 → 拒否、(3)接続していないClient ID(999)からの要求 → 拒否。いずれもSpawnされず、理由を示すWarningがConsoleに出力されることを確認
+- **Network Chain Reaction**: Ground範囲内(±15m)に0.4m間隔で10個のDominoをHost側テストコードでSpawnし(本番の`PlacementController`/`DominoSpawner`コードは変更せず、`execute_code`による純粋なテスト専用の直接Spawnで実施)、1個目に28°のトリガー角を与えたところ、Step 3と同じ「約68°で連鎖的に倒れ、最後の1個だけが完全水平(90°)になる」パターンが10個全てに再現されました。全10個が`IsNetworkVisibleTo(client)`でClientにも観測可能であることを確認
+- Console: 本Stepの実装コード(`PlacementController`/`DominoSpawner`/`Domino.prefab`関連)由来のErrorは0件
+
+### 未実装/確認できなかった事項
+- **Client自身の操作によるRPC送信の直接確認**: Step 4から持ち越しの制約で、MPPMの仮想Player(Client)プロセスへOS経由でキーボード入力を送る手段が今回も見つかりませんでした(マウスの絶対座標クリックは届くのに対し、キーボードは`SendInput`のVirtual-Key方式・Scan Code方式のいずれでも届かないことを、Windowの実際のフォーカス確認込みで再確認しました)。そのため「Clientが実際にEキー→クリックの操作を行った結果としてRPCが送信される」経路そのものは自動テストできておらず、上記の通りHost側から`senderClientId=1`を指定した代理呼び出しで検証しています
+- **Client PlayerがHost Authority Dominoを押し倒す確認**: **今回のStep 5で最も重要とされていた検証項目ですが、確認できませんでした。** 理由は上記と同じ入力の制約です(Client自身を歩かせる操作ができない)。Host側でClientのPlayerの複製(Kinematic)を直接`Rigidbody.MovePosition()`で動かして代用しようとしましたが、`NetworkTransform`が実際に接続しているClientの本当の位置へ絶えず補正をかけ直すため、この代用方法では意味のあるデータが得られませんでした(詳細下記)。**開発者ご自身での実機確認を強くお勧めします**(手順: MPPMでClientをアクティブ化し、Client側のウィンドウでE→クリックでDominoを設置後、そのDominoにClientのPlayerで歩いて接触する)
+- Client側のPlacementController/GhostDominoの内部状態(`_isPlacing`等)は、専用のUnityMCPブリッジがないため直接確認できていません
+
+### 将来確認が必要な事項
+- **Client PlayerとHost Authority Dominoの衝突確認**(上記参照、最優先)
+- **Chain Reactionの間隔依存の非決定性は依然として残っています**: 本Stepのテストでは28°という明確なトリガー角度を選んだことで10個の連鎖に成功しましたが、Step 3同様、境界に近い条件では「途中で止まる」結果になることを実際に確認しました(0.4m間隔・28°より小さいトリガー角度で複数回試行した際に、1〜2個目までしか連鎖が伝播しないケースが発生)。これはNetwork化の有無に関わらない、Domino物理そのものの既知の特性です。Host/Client間でこの非決定性が異なる結果(Desync)を生まないかは、大規模なChain Reactionを実装する際に改めて注意が必要です
+- **UnityTransportの受信キュー枯渇警告**: 10個のDominoをテストコードで同時にSpawnした際、Console に `"Receive queue is full, some packets could be dropped, consider increase its size (128)"` という警告(Unity側の分類ではError扱い)が2回出力されました。実際には10個全てが正しくClientへ配信されたことを確認しており実害は無かったものの、将来100〜数百個のDominoを扱う際にはこの受信キューサイズ(既定128)を明示的に増やすか、Spawnを複数フレームに分散させる対策を検討する必要があります。プレイヤーが1個ずつ手動で配置する通常のペースでは問題にならない想定です
+- `Domino.prefab`にNetworkObjectを追加したことで、Step 3の`DominoLine`配下の20個(Editor上に直接配置されたインスタンス)も同じPrefabを継承するため、`NetworkObject`を持つことになりました。現在`DominoLine`は非アクティブのため実害はありませんが、将来これを再度使う場合は「In-Scene-Placed NetworkObject」としての扱われ方(Scene読み込み時の自動同期)に注意が必要です
+- Step 5では`maxPlacementDistance`(既定3m)や`DominoSpawner`の検証ロジックはMVP水準です。将来的な不正対策の強化が必要になった場合は改めて設計が必要です

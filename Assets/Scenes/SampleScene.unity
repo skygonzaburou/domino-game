@@ -183,6 +183,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 693914605
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_06
@@ -245,6 +265,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 4214960276
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_12
@@ -302,6 +342,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 1993749917
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_09
@@ -359,6 +419,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 911529685
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_17
@@ -426,6 +506,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 1321449753
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_16
@@ -483,6 +583,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2589484109
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_14
@@ -545,6 +665,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 1556072829
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_08
@@ -761,6 +901,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 4006672362
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_13
@@ -1058,6 +1218,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 3099149749
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_03
@@ -1115,6 +1295,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 3747967858
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_15
@@ -1177,6 +1377,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 267128384
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_11
@@ -1238,6 +1458,7 @@ GameObject:
   - component: {fileID: 592590542}
   - component: {fileID: 592590541}
   - component: {fileID: 592590544}
+  - component: {fileID: 592590545}
   m_Layer: 0
   m_Name: NetworkManager
   m_TagString: Untagged
@@ -1345,6 +1566,20 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6235191abb19cf448957829b52cdb22b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Domino.Networking.NetworkBootstrap
+--- !u!114 &592590545
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 592590540}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d3266da2b54dc144950228f352e1a42, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.DominoSystem.DominoSpawner
+  dominoPrefab: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+  maxPlacementDistance: 3
 --- !u!4 &598564248 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 5636314518991483368, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
@@ -1427,6 +1662,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2796618722
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_19
@@ -1494,6 +1749,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2027580729
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_04
@@ -1551,6 +1826,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 1872087210
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_02
@@ -1613,6 +1908,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2562351882
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_18
@@ -1680,6 +1995,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2528623286
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_01
@@ -1741,6 +2076,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2029106819
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_05
@@ -1798,6 +2153,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 412448717
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_10
@@ -1855,6 +2230,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 917436833
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_07
@@ -1932,6 +2327,26 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 21021403}
     m_Modifications:
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlaced
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: GlobalObjectIdHash
+      value: 2180379012
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: SceneMigrationSynchronization
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: m_InScenePlacedDisabledByDefault
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 131349596343872477, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
+      propertyPath: InScenePlacedSourceGlobalObjectIdHash
+      value: 2810903380
+      objectReference: {fileID: 0}
     - target: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
       propertyPath: m_Name
       value: Domino_00

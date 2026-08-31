@@ -14,7 +14,6 @@ namespace Domino.Player
         [SerializeField] private Key cancelKey = Key.Escape;
 
         [Header("References")]
-        [SerializeField] private GameObject dominoPrefab;
         [SerializeField] private GameObject ghostDominoPrefab;
 
         [Header("Placement Position")]
@@ -22,12 +21,12 @@ namespace Domino.Player
         [SerializeField] private float hoverHeight = 0.15f;
         [SerializeField] private float groundRaycastRange = 3f;
         [SerializeField] private LayerMask groundMask = ~0;
+        [SerializeField] private float dominoRestingHeight = 0.5f;
 
         private PlayerMotor _motor;
         private GameObject _ghostInstance;
         private GhostDomino _ghostDomino;
         private bool _isPlacing;
-        private Transform _placedDominoParent;
 
         private void Awake()
         {
@@ -41,8 +40,6 @@ namespace Domino.Player
                 enabled = false;
                 return;
             }
-
-            _placedDominoParent = FindOrCreatePlacedDominoParent();
         }
 
         private void Update()
@@ -115,12 +112,27 @@ namespace Domino.Player
 
         private void ConfirmPlacement()
         {
-            Vector3 position = _ghostInstance.transform.position;
+            // The Ghost's Y is its metronome pivot height (hoverHeight), not a physically
+            // correct resting height for a real Domino. Spawning the real Domino at that
+            // pivot embeds it deep in the ground, which can topple even a vertical Domino
+            // via chaotic depenetration. Re-derive ground Y and use the Domino's own resting
+            // height instead - this only adjusts Y; X/Z and rotation are still used exactly
+            // as-is, so the "no angle correction" placement rule is untouched.
+            Vector3 ghostPosition = _ghostInstance.transform.position;
+            float groundY = ghostPosition.y - hoverHeight;
+            Vector3 position = new Vector3(ghostPosition.x, groundY + dominoRestingHeight, ghostPosition.z);
             Quaternion rotation = _ghostDomino.CurrentRotation;
 
-            Instantiate(dominoPrefab, position, rotation, _placedDominoParent);
+            RequestPlacementRpc(position, rotation);
 
             ExitPlacementMode();
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+        private void RequestPlacementRpc(Vector3 position, Quaternion rotation, RpcParams rpcParams = default)
+        {
+            ulong senderClientId = rpcParams.Receive.SenderClientId;
+            DominoSpawner.Instance.TryPlaceDomino(position, rotation, senderClientId);
         }
 
         private void CancelPlacement()
@@ -141,16 +153,6 @@ namespace Domino.Player
             {
                 ThirdPersonCamera.Instance.ExitPlacementView();
             }
-        }
-
-        private static Transform FindOrCreatePlacedDominoParent()
-        {
-            GameObject existing = GameObject.Find("PlacedDominoes");
-            if (existing == null)
-            {
-                existing = new GameObject("PlacedDominoes");
-            }
-            return existing.transform;
         }
     }
 }
