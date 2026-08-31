@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using Domino.CameraSystem;
 using Domino.DominoSystem;
+using Domino.GameFlow;
 
 namespace Domino.Player
 {
@@ -15,6 +16,7 @@ namespace Domino.Player
 
         [Header("References")]
         [SerializeField] private GameObject ghostDominoPrefab;
+        [SerializeField] private GameObject placementMarkerPrefab;
 
         [Header("Placement Position")]
         [SerializeField] private float forwardDistance = 1.2f;
@@ -26,7 +28,17 @@ namespace Domino.Player
         private PlayerMotor _motor;
         private GameObject _ghostInstance;
         private GhostDomino _ghostDomino;
+        private GameObject _markerInstance;
         private bool _isPlacing;
+        private bool _markerActive;
+
+        // Single source of truth for where a Domino would go: computed once by
+        // UpdateMarker()/EnterPlacementMode(), then reused as-is by the Marker, the
+        // Ghost (with its own hoverHeight offset for the wobble pivot) and the RPC sent
+        // on Confirm - none of them ever recompute this independently.
+        private Vector3 _anchorGroundPosition;
+        private Quaternion _anchorFlatRotation;
+        private Vector3 _anchorGroundNormal;
 
         private void Awake()
         {
@@ -46,8 +58,21 @@ namespace Domino.Player
         {
             if (!IsOwner) return;
 
+            if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING)
+            {
+                if (_isPlacing) CancelPlacement();
+                else if (_markerActive) HideMarker();
+                return;
+            }
+
             if (!_isPlacing)
             {
+                var mouse = Mouse.current;
+                if (mouse != null && mouse.rightButton.wasPressedThisFrame)
+                {
+                    UpdateMarker();
+                }
+
                 if (Keyboard.current != null && Keyboard.current[enterPlacementKey].wasPressedThisFrame)
                 {
                     EnterPlacementMode();
@@ -55,43 +80,78 @@ namespace Domino.Player
                 return;
             }
 
-            var mouse = Mouse.current;
-            if (mouse != null && mouse.leftButton.wasPressedThisFrame)
+            var m = Mouse.current;
+            if (m != null && m.leftButton.wasPressedThisFrame)
             {
                 ConfirmPlacement();
                 return;
             }
 
-            bool cancelledByMouse = mouse != null && mouse.rightButton.wasPressedThisFrame;
-            bool cancelledByKey = Keyboard.current != null && Keyboard.current[cancelKey].wasPressedThisFrame;
-            if (cancelledByMouse || cancelledByKey)
+            if (Keyboard.current != null && Keyboard.current[cancelKey].wasPressedThisFrame)
             {
                 CancelPlacement();
             }
         }
 
-        private void EnterPlacementMode()
+        private void ComputeGroundAnchor()
         {
-            _isPlacing = true;
-            _motor.SetMovementEnabled(false);
-
             Vector3 flatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
             if (flatForward.sqrMagnitude < 0.0001f) flatForward = Vector3.forward;
 
             Vector3 basePos = transform.position + flatForward * forwardDistance;
             float groundY = transform.position.y;
+            Vector3 groundNormal = Vector3.up;
 
             Vector3 rayOrigin = basePos + Vector3.up * groundRaycastRange * 0.5f;
             if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, groundRaycastRange, groundMask, QueryTriggerInteraction.Ignore))
             {
                 groundY = hit.point.y;
+                groundNormal = hit.normal;
             }
 
-            Vector3 spawnPosition = new Vector3(basePos.x, groundY + hoverHeight, basePos.z);
-            Quaternion spawnRotation = Quaternion.LookRotation(flatForward, Vector3.up);
+            _anchorGroundPosition = new Vector3(basePos.x, groundY, basePos.z);
+            _anchorFlatRotation = Quaternion.LookRotation(flatForward, Vector3.up);
+            _anchorGroundNormal = groundNormal;
+        }
+
+        private void UpdateMarker()
+        {
+            ComputeGroundAnchor();
+
+            EnsureMarkerInstance();
+            Quaternion slopeAlign = Quaternion.FromToRotation(Vector3.up, _anchorGroundNormal);
+            _markerInstance.transform.SetPositionAndRotation(_anchorGroundPosition, slopeAlign * _anchorFlatRotation);
+            _markerInstance.SetActive(true);
+            _markerActive = true;
+        }
+
+        private void EnsureMarkerInstance()
+        {
+            if (_markerInstance != null) return;
+            _markerInstance = Instantiate(placementMarkerPrefab);
+            _markerInstance.SetActive(false);
+        }
+
+        private void HideMarker()
+        {
+            if (_markerInstance != null) _markerInstance.SetActive(false);
+            _markerActive = false;
+        }
+
+        private void EnterPlacementMode()
+        {
+            if (!_markerActive)
+            {
+                ComputeGroundAnchor();
+            }
+
+            _isPlacing = true;
+            _motor.SetMovementEnabled(false);
+
+            Vector3 spawnPosition = _anchorGroundPosition + Vector3.up * hoverHeight;
 
             EnsureGhostInstance();
-            _ghostInstance.transform.SetPositionAndRotation(spawnPosition, spawnRotation);
+            _ghostInstance.transform.SetPositionAndRotation(spawnPosition, _anchorFlatRotation);
             _ghostInstance.SetActive(true);
             _ghostDomino.ResetWobble();
 
@@ -112,15 +172,11 @@ namespace Domino.Player
 
         private void ConfirmPlacement()
         {
-            // The Ghost's Y is its metronome pivot height (hoverHeight), not a physically
-            // correct resting height for a real Domino. Spawning the real Domino at that
-            // pivot embeds it deep in the ground, which can topple even a vertical Domino
-            // via chaotic depenetration. Re-derive ground Y and use the Domino's own resting
-            // height instead - this only adjusts Y; X/Z and rotation are still used exactly
-            // as-is, so the "no angle correction" placement rule is untouched.
-            Vector3 ghostPosition = _ghostInstance.transform.position;
-            float groundY = ghostPosition.y - hoverHeight;
-            Vector3 position = new Vector3(ghostPosition.x, groundY + dominoRestingHeight, ghostPosition.z);
+            // Ghost/Marker Y is the wobble pivot height (hoverHeight above ground), not a
+            // physically correct resting height for a real Domino. Use the anchor's ground
+            // Y plus the Domino's own resting height instead - this only affects Y; X/Z and
+            // rotation are still used exactly as-is, so "no angle correction" is untouched.
+            Vector3 position = new Vector3(_anchorGroundPosition.x, _anchorGroundPosition.y + dominoRestingHeight, _anchorGroundPosition.z);
             Quaternion rotation = _ghostDomino.CurrentRotation;
 
             RequestPlacementRpc(position, rotation);
@@ -147,6 +203,7 @@ namespace Domino.Player
             {
                 _ghostInstance.SetActive(false);
             }
+            HideMarker();
             _motor.SetMovementEnabled(true);
 
             if (ThirdPersonCamera.Instance != null)

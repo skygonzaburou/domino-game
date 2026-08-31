@@ -267,6 +267,19 @@ private void Start()
 
 ---
 
+## 16.5 NetworkVariableによるGameFlowの同期(Step 6)
+
+Step 6で、ゲーム進行状態(`GamePhase`)やCheckpoint進捗を`GameFlowManager`(`NetworkBehaviour`)の`NetworkVariable<T>`で管理・同期する仕組みを追加しました。これはDominoのHost Authority(第17章以降)と全く同じ考え方の応用で、「HostだけがGamePhaseを書き換えてよい」「全員が現在の値を読める」という制約を、コード上で以下のように表現しています。
+
+```csharp
+private readonly NetworkVariable<GamePhase> _phase = new NetworkVariable<GamePhase>(
+    GamePhase.BUILDING, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+```
+
+`NetworkTransform`(位置・回転専用)とは異なり、`NetworkVariable<T>`は任意の値(enum・int・boolなど)を同期できる、より汎用的な仕組みです。Domino/Playerの位置同期には使いませんが、「今何のPhaseか」のような**ゲーム全体で1つだけ存在する状態**を同期するのに向いています。GameFlowManager自体の詳しい設計は`GameFlow.md`にまとめています。
+
+---
+
 ## 17. Domino.prefabのNetwork化(Step 5)
 
 Step 5で `Domino.prefab` に `NetworkObject`・`NetworkTransform`・`NetworkRigidbody` を追加し、Playerと同じ仕組みでネットワーク対応させました。Playerとの決定的な違いは **Authorityの向き** です。

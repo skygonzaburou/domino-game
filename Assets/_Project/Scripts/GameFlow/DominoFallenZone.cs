@@ -1,0 +1,72 @@
+using System.Collections.Generic;
+using Unity.Netcode;
+using UnityEngine;
+
+namespace Domino.GameFlow
+{
+    [RequireComponent(typeof(Collider))]
+    public abstract class DominoFallenZone : MonoBehaviour
+    {
+        [Header("Domino Fallen Detection")]
+        [Tooltip("この角度(度)以上傾いたDominoを「倒れた」と判定する")]
+        [SerializeField] private float fallenAngleThreshold = 60f;
+
+        public bool IsSatisfied { get; private set; }
+
+        private readonly HashSet<Transform> _dominoesInside = new HashSet<Transform>();
+        private readonly HashSet<Transform> _excludedDominoes = new HashSet<Transform>();
+
+        // Called by GameFlowManager when RUNNING begins. Dominoes already fallen and
+        // already inside at this moment are excluded for the rest of this run, so
+        // pre-existing BUILDING-time accidents can never satisfy this zone.
+        public void OnRunStart()
+        {
+            IsSatisfied = false;
+            _excludedDominoes.Clear();
+            foreach (var t in _dominoesInside)
+            {
+                if (IsFallen(t)) _excludedDominoes.Add(t);
+            }
+        }
+
+        protected virtual void OnTriggerEnter(Collider other)
+        {
+            if (!other.CompareTag("Domino")) return;
+            _dominoesInside.Add(other.transform);
+            CheckDomino(other.transform);
+        }
+
+        protected virtual void OnTriggerStay(Collider other)
+        {
+            if (!other.CompareTag("Domino")) return;
+            CheckDomino(other.transform);
+        }
+
+        protected virtual void OnTriggerExit(Collider other)
+        {
+            if (!other.CompareTag("Domino")) return;
+            _dominoesInside.Remove(other.transform);
+        }
+
+        private void CheckDomino(Transform dominoTransform)
+        {
+            // NetworkManager.Singleton is null for a brief window while Play Mode is
+            // tearing down (colliders still fire Enter/Exit as objects get destroyed).
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+            if (IsSatisfied) return;
+            if (GameFlowManager.Instance == null || GameFlowManager.Instance.CurrentPhase != GamePhase.RUNNING) return;
+            if (_excludedDominoes.Contains(dominoTransform)) return;
+
+            if (IsFallen(dominoTransform))
+            {
+                IsSatisfied = true;
+                GameFlowManager.Instance.OnZoneStateChanged();
+            }
+        }
+
+        private bool IsFallen(Transform t)
+        {
+            return Vector3.Angle(t.up, Vector3.up) >= fallenAngleThreshold;
+        }
+    }
+}

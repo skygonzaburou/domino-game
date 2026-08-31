@@ -1,6 +1,6 @@
 # Architecture(全体構成)
 
-このドキュメントは、2026年時点でプロジェクトに**実際に実装されている内容**を、Project / Scene / Prefab / Script / Package の実体を確認した上でまとめたものです。`GameDesign.md` に書かれている将来仕様(チェックポイント等)の多くはまだ実装されていません。ここに書かれているのは「Step 0〜Step 5」で作られた、オンライン対応の土台部分、Network化されたHost-Authoritative Domino物理、ネットワーク非対応のGhost Domino配置システムです。
+このドキュメントは、2026年時点でプロジェクトに**実際に実装されている内容**を、Project / Scene / Prefab / Script / Package の実体を確認した上でまとめたものです。`GameDesign.md` に書かれている将来仕様の多くはまだ実装されていません。ここに書かれているのは「Step 0〜Step 6」で作られた、オンライン対応の土台部分、Network化されたHost-Authoritative Domino物理、ネットワーク非対応のGhost Domino配置システム(Placement Marker含む)、そしてHost AuthorityのGameFlow(BUILDING/READY/RUNNING/SUCCESS)です。GameFlowの詳細は`GameFlow.md`、Stageの組み立て方は`StageAuthoring.md`を参照してください。
 
 ---
 
@@ -16,22 +16,40 @@ Assets/
 │  │  │  ├─ Movement/
 │  │  │  │  └─ PlayerMotor.cs
 │  │  │  ├─ Placement/             … Step 4で追加
-│  │  │  │  └─ PlacementController.cs
+│  │  │  │  ├─ PlacementController.cs
+│  │  │  │  └─ PlacementMarker.cs  … Step 6で追加
+│  │  │  ├─ ChallengeInput.cs      … Step 6で追加(Fキーで Start Challenge RPCを送信)
 │  │  │  ├─ Visual/               … (空フォルダ。将来のAnimator接続・見た目切り替え用に予約)
 │  │  │  └─ Network/              … (空フォルダ。現状ネットワーク処理はPlayerMotorに同居)
 │  │  ├─ Domino/
 │  │  │  ├─ GhostDomino.cs        … Step 4で追加
 │  │  │  └─ DominoSpawner.cs      … Step 5で追加(Host専用のValidation・Spawn処理)
+│  │  ├─ GameFlow/                … Step 6で追加
+│  │  │  ├─ GamePhase.cs
+│  │  │  ├─ GameFlowManager.cs
+│  │  │  ├─ DominoFallenZone.cs   … Start/Checkpoint/Goalの共通基底クラス
+│  │  │  ├─ StartAreaZone.cs
+│  │  │  ├─ CheckpointZone.cs
+│  │  │  └─ GoalAreaZone.cs
 │  │  ├─ Networking/
 │  │  │  └─ NetworkBootstrap.cs
 │  │  └─ CameraSystem/
 │  │     └─ ThirdPersonCamera.cs  … Step 4でPlacement View機能を追加
 │  ├─ Prefabs/
-│  │  ├─ Player.prefab            … Step 4で PlacementController を追加
-│  │  ├─ Domino.prefab            … Step 3で作成(ローカル物理のみ)。Step 5で NetworkObject/NetworkTransform/NetworkRigidbody を追加しHost Authority化
-│  │  └─ GhostDomino.prefab       … Step 4で追加。ネットワーク非対応・Physics非干渉の配置プレビュー用(Step 5でも変更なし)
+│  │  ├─ Player.prefab            … Step 4で PlacementController、Step 6で ChallengeInput を追加
+│  │  ├─ Domino.prefab            … Step 3で作成。Step 5でNetwork化。Step 6でWidthを0.30→0.35に調整
+│  │  ├─ GhostDomino.prefab       … Step 4で追加。Step 6でDomino.prefabに合わせWidthを0.35に調整
+│  │  ├─ PlacementMarker.prefab   … Step 6で追加。ネットワーク非対応のLocal専用UI的表示
+│  │  └─ GameFlow/                … Step 6で追加
+│  │     ├─ StartArea.prefab
+│  │     ├─ Checkpoint.prefab
+│  │     └─ GoalArea.prefab
 │  ├─ Materials/                  … Step 4で追加
-│  │  └─ GhostDominoMaterial.mat  … URP/Lit、半透明(Transparent Surface)
+│  │  ├─ GhostDominoMaterial.mat  … URP/Lit、半透明(Transparent Surface)
+│  │  ├─ PlacementMarkerMaterial.mat  … Step 6で追加
+│  │  ├─ StartAreaMaterial.mat        … Step 6で追加(青)
+│  │  ├─ CheckpointMaterial.mat       … Step 6で追加(黄)
+│  │  └─ GoalAreaMaterial.mat         … Step 6で追加(緑)
 │  └─ Physics/                    … Step 3で追加
 │     ├─ DominoPhysicsMaterial.physicMaterial
 │     └─ GroundPhysicsMaterial.physicMaterial
@@ -72,20 +90,24 @@ Assets/
 
 Scene は `Assets/Scenes/SampleScene.unity` の1つだけで、Build Settingsにもこれ1つだけが登録されています。
 
-Scene内のRoot GameObjectは次の6つです。
+Scene内のRoot GameObjectは次の8つです。
 
 | GameObject | 主なComponent | 役割 |
 |---|---|---|
 | **Main Camera** | Camera, AudioListener, `ThirdPersonCamera` | 三人称カメラ本体。Scene起動時から常に存在する |
 | **Ground** | MeshFilter/MeshRenderer(Plane), MeshCollider | 30m×30mの床(Planeプリミティブをscale(3,1,3)で拡大)。MeshColliderには`GroundPhysicsMaterial`を設定 |
 | **Directional Light** | Light | Universal 3Dテンプレート標準のライト |
-| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap` | オンライン通信の起点となるオブジェクト |
+| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap`, `DominoSpawner` | オンライン通信の起点となるオブジェクト |
 | **Global Volume** | Volume | URPのポストプロセス設定(テンプレート標準) |
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
+| **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
+| **GameFlowZones**(Step 6) | Transform のみ(空の親) | `StartArea` / `Checkpoint_01` / `Checkpoint_02` / `GoalArea` の4つのZoneインスタンスをまとめる親。実際のコース配置はStageごとに変わる想定で、詳細はStageAuthoring.mdを参照 |
 
 **重要**: このScene自体には **Playerは1体も配置されていません**。Playerは `NetworkManager` が実行時に `Player.prefab` を都度生成(Spawn)する形で登場します。これはNetcode for GameObjectsの標準的な作り方で、「Editor上で目に見える固定のキャラクター」ではなく「接続してきたクライアントの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**です。Step 3時点では`Domino.prefab`が`NetworkObject`を持たなかったため同期対象外でしたが、Step 5で`Domino.prefab`に`NetworkObject`が追加されたことで、これら20個も「In-Scene-Placed NetworkObject」という扱いを継承しています。現在`DominoLine`は非アクティブのため実際にSpawn/同期が走ることはありませんが、将来再度アクティブ化して使う場合はこの点に注意してください(詳細はImplementationStatus.mdのStep 5章を参照)。
 
 Step 4で追加したGhost Dominoは、Playerと同様に**Scene上には直接配置されておらず**、`PlacementController`が実行時に`Instantiate()`する形で登場する、完全にLocal限定の見た目専用オブジェクトです(`NetworkObject`を持ちません)。Ghostは`PlacementController`ごとに1体だけ生成され、非表示⇄表示を繰り返して使い回されます(Placement Modeを抜けるたびに`Destroy`されるわけではありません)。一方、確定後のReal Dominoは、Step 4では確定したClient自身がローカルで`Instantiate()`していましたが、Step 5でこれをやめ、**必ずHost側の`DominoSpawner`が`NetworkObject.InstantiateAndSpawn()`で生成する**方式に変更しました(詳細はNetworking.mdの第17〜19章を参照)。
+
+Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController`が実行時に`Instantiate()`する完全Local限定オブジェクトです(`NetworkObject`を持ちません)。Ghost/Markerとの違いはNetworking.mdではなくPlayerSystem.mdの「Placement Mode」章で詳しく説明しています。
 
 ---
 
@@ -103,6 +125,9 @@ Step 4で追加したGhost Dominoは、Playerと同様に**Scene上には直接�
 
 この4つの関係は Networking.md で詳しく説明しています。
 
+### GameFlowManager(Step 6)
+`NetworkObject`と`GameFlowManager`の2つが載っています。`NetworkManager`とは別のGameObjectで、Scene読み込み時から存在する「Scene-placed NetworkObject」です(Playerのように接続の都度動的生成されるのではありません)。`GamePhase`・Checkpoint進捗などを`NetworkVariable`で全Clientへ同期する司令塔で、詳細はGameFlow.mdを参照してください。
+
 ---
 
 ## 5. Script一覧と役割
@@ -116,8 +141,16 @@ Step 4で追加したGhost Dominoは、Playerと同様に**Scene上には直接�
 | [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする |
 | [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加 |
 | [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
+| [PlacementMarker.cs](../Assets/_Project/Scripts/Player/Placement/PlacementMarker.cs) | `Domino.Player.PlacementMarker` | `MonoBehaviour` | Step 6で追加。床に表示するPlacement Markerの見た目(サイズ・不透明度)のみを扱う、完全ローカルの表示専用コンポーネント |
+| [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | Step 6で追加。`F`キー押下を`GameFlowManager`へのRPC呼び出しに変換する単機能スクリプト |
+| [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | Step 6で追加。BUILDING/READY/RUNNING/SUCCESSの4状態を定義 |
+| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Step 6で追加。GamePhase/Checkpoint進捗をHost Authorityで管理し、NetworkVariableで同期する司令塔 |
+| [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | Step 6で追加。Zone内でDominoが倒れたかどうかを判定する共通基底クラス |
+| [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Step 6で追加。Start Domino判定に加え、Player Ready判定(全員がStart Areaに入ったか)を行う |
+| [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Step 6で追加。Checkpoint判定と、明示的な通過順序(`CheckpointIndex`)を持つ |
+| [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Step 6で追加。Goal判定を行う |
 
-各スクリプトのField/Methodの詳細は `PlayerSystem.md`(PlayerMotor / PlayerStats / ThirdPersonCamera / PlacementController / GhostDomino)と `Networking.md`(NetworkBootstrap)にまとめています。
+各スクリプトのField/Methodの詳細は `PlayerSystem.md`(PlayerMotor / PlayerStats / ThirdPersonCamera / PlacementController / PlacementMarker / GhostDomino)、`Networking.md`(NetworkBootstrap / DominoSpawner)、`GameFlow.md`(GameFlowManager / 各Zone / ChallengeInput)にまとめています。
 
 ---
 
@@ -135,11 +168,14 @@ Player (Root)
 ├─ NetworkTransform
 ├─ NetworkRigidbody
 ├─ PlacementController     … Step 4で追加
+├─ ChallengeInput          … Step 6で追加
 ├─ Visual                 (子GameObject, ローカル座標 0, 1, 0)
 │   ├─ MeshFilter (Capsule)
 │   └─ MeshRenderer
 └─ CameraTarget            (子GameObject, ローカル座標 0, 1.6, 0)
 ```
+
+`PlacementController`はStep 6で`placementMarkerPrefab`フィールドが追加され、`GhostDomino.prefab`に加えて`PlacementMarker.prefab`への参照も持つようになりました。
 
 物理判定(Rigidbody / CapsuleCollider)とネットワーク関連コンポーネントはすべて **Root** に集約し、見た目(Capsuleメッシュ)は **Visual** という別の子オブジェクトに分離してあります。これは「将来Capsuleを3Dモデルに差し替えるときに、Rootの物理・ネットワーク設定を一切変更せずに済む」ようにするための意図的な設計です。`CameraTarget` は三人称カメラが注視する頭の高さの目印用の空オブジェクトです。
 
@@ -149,7 +185,7 @@ Player (Root)
 
 ```
 Domino (Root, 単一GameObject)
-├─ Transform      (localScale 0.3 x 1.0 x 0.15)
+├─ Transform      (localScale 0.35 x 1.0 x 0.15、Step 6でWidthを0.30→0.35に調整)
 ├─ MeshFilter     (Cube)
 ├─ MeshRenderer
 ├─ BoxCollider    (Material: DominoPhysicsMaterial)
@@ -165,13 +201,39 @@ Playerとは異なり、`Domino.prefab` は見た目(Visual)と物理(Physics)�
 
 ```
 GhostDomino (Root, 単一GameObject)
-├─ Transform      (localScale 0.3 x 1.0 x 0.15、Domino.prefabと同じ見た目サイズ)
+├─ Transform      (localScale 0.35 x 1.0 x 0.15、Domino.prefabと同じ見た目サイズ)
 ├─ MeshFilter     (Cube)
 ├─ MeshRenderer   (Material: GhostDominoMaterial、半透明)
 └─ GhostDomino    (首振りアニメーションのみ。Collider・Rigidbodyは持たない)
 ```
 
 `Domino.prefab`と見比べると、`BoxCollider`と`Rigidbody`が意図的に存在しません。これによって「PhysicsやPlayer/他のDominoと一切干渉しない、見た目だけのプレビュー」であることをコードの分岐(`if`文)ではなく**コンポーネント構成そのもの**で保証しています。
+
+`PlacementMarker.prefab`(`Assets/_Project/Prefabs/PlacementMarker.prefab`、Step 6で追加)の階層構造:
+
+```
+PlacementMarker (Root, 単一GameObject)
+├─ Transform      (Cylinderプリミティブ、localScale 0.6 x 0.05 x 0.6 = 薄い円盤状)
+├─ MeshFilter     (Cylinder)
+├─ MeshRenderer   (Material: PlacementMarkerMaterial、半透明)
+└─ PlacementMarker (サイズ・不透明度をAwake()で反映するだけ。Collider・Rigidbody・NetworkObjectは持たない)
+```
+
+GhostDominoと同じく、Collider・Rigidbody・NetworkObjectを一切持たない完全ローカルの見た目専用オブジェクトです。
+
+`StartArea.prefab` / `Checkpoint.prefab` / `GoalArea.prefab`(`Assets/_Project/Prefabs/GameFlow/`、Step 6で追加)は3つとも同じ階層構造です:
+
+```
+<Zone> (Root)
+├─ Transform       (Cubeプリミティブ相当のサイズ。BoxColliderの範囲を決める)
+├─ BoxCollider      (isTrigger = true)
+├─ <Zone>Zone        (StartAreaZone / CheckpointZone / GoalAreaZone)
+└─ Visual            (子GameObject。ローカルY = -0.5、床面に薄いパッドとして表示するだけ)
+    ├─ MeshFilter (Cube)
+    └─ MeshRenderer (Material: StartArea/Checkpoint/GoalAreaMaterial)
+```
+
+RootのCollider(判定用、見えない)と、Visual子オブジェクトの薄いパッド(見た目用)を分離しているのは、Player.prefabの Root(物理・ネットワーク) / Visual(見た目) という分離パターンを踏襲したものです。CheckpointのみRootに`Checkpoint Index`フィールドを持ちます。いずれも`NetworkObject`を持たない、Host/Client共通のScene静的オブジェクトです(判定処理自体はHost側だけが行います。詳細はGameFlow.mdを参照)。
 
 ---
 

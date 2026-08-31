@@ -1,6 +1,6 @@
 # ImplementationStatus(実装状況の整理)
 
-Step 0〜Step 5について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
+Step 0〜Step 6について、「実装済み」「動作確認済み」「未実装」「将来確認が必要な事項」を整理します。ここでいう「動作確認済み」は、Unity Editor上での実機確認(スクリーンショット・ネットワーク状態の直接確認等)によって裏付けが取れているものだけを指し、コードを書いただけで未検証のものとは区別しています。
 
 ---
 
@@ -154,6 +154,73 @@ Step 4でもネットワーク関連の設定・コードには一切手を加�
 - 検証ログに残った2件のConsole警告("Setting linear velocity of a kinematic body is not supported"等)は、検証用の一時的なテストコード(Player位置の強制リセット処理)が原因であり、`PlacementController`/`GhostDomino`/`PlayerMotor`/`ThirdPersonCamera`などの本実装コードからは発生していません
 - Step 5でDominoをNetworkObject化する際、`PlacementController.ConfirmPlacement()`のローカル`Instantiate()`をHost側でのNetwork Spawn呼び出しに置き換える設計変更が必要になります(→ Step 5で実施)
 - Step 3で確認された「間隔0.5m〜0.7mでの非決定的なChain Reaction」の問題は、プレイヤーが手動で配置する間隔にも同様の影響を与えうるため、Step 5以降で配置間隔の目安をUI等でガイドすることを検討する価値があります
+
+---
+
+## Step 6: Game Flow / Placement UX改善 / Stage Authoring
+
+Step 6では、Step 5までのNetwork Physics Architecture(`NetworkBootstrap`/Port 7778/Player・DominoのNetworkObject構成/`DominoSpawner`/Placement Request RPC/Placement Validation/Ghost DominoのLocal Only/Step 5で修正したReal DominoのSpawn Height処理)には一切変更を加えていません。今回追加したのは(1)Host AuthorityのGameFlow(BUILDING/READY/RUNNING/SUCCESS)、(2)Placement Position Marker、(3)Domino Widthの軽微な調整、(4)Stage Authoring構成、の4点です。
+
+### 実装済み
+
+**Placement UX**
+- `PlacementMarker.cs`(新規, `Domino.Player`名前空間, 通常の`MonoBehaviour`)と`PlacementMarker.prefab`(新規)を作成。床に半透明の円盤を表示するだけの完全ローカル・見た目専用オブジェクト
+- `PlacementController.cs`を変更: Marker/Ghost/Real Dominoの位置計算を`ComputeGroundAnchor()`という単一メソッドに統一(Single Source of Truth化)。右クリックでMarker表示・更新、`E`キーでMarker位置(無ければその場で計算した位置)からPlacement Mode開始、`Escape`のみでキャンセルするよう入力を再整理(右クリックのキャンセル機能は廃止)
+- `PlacementController.Update()`の先頭で`GameFlowManager.CurrentPhase == GamePhase.BUILDING`を確認し、BUILDING以外では配置操作を一切受け付けないよう変更。Placement Mode中にPhaseが変化した場合は自動的にCancel処理が走る
+
+**Domino Width**
+- `Domino.prefab`・`GhostDomino.prefab`のWidthを0.30→**0.35**に変更(Height 1.00・Depth 0.15は変更なし)。BoxCollider・Rigidbody・NetworkObject関連の設定は無変更
+
+**Game Flow**
+- `GamePhase.cs`(enum: BUILDING/READY/RUNNING/SUCCESS)を新規作成
+- `GameFlowManager.cs`(新規, `NetworkBehaviour`)を作成し、Scene内に新規GameObject `GameFlowManager`(Scene-placed `NetworkObject`)として配置。`NetworkVariable<GamePhase>`・`NetworkVariable<int>`(CheckpointProgress)・`NetworkVariable<bool>`(StartTriggered)の3つでHost Authorityの状態を全Clientへ同期
+- `DominoFallenZone.cs`(新規, abstract `MonoBehaviour`)を作成し、「Zone内でDominoが倒れたか」の判定を共通化。`StartAreaZone.cs`・`CheckpointZone.cs`・`GoalAreaZone.cs`(いずれも新規)がこれを継承
+- `ChallengeInput.cs`(新規, `NetworkBehaviour`)を作成し、Player.prefabへ追加。`F`キー押下を`GameFlowManager`への`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]`呼び出しに変換
+- `Domino.prefab`に`"Domino"`タグを新規追加(Zoneのトリガー判定で、対象がDominoかどうかを判別するため)
+
+**Stage Authoring**
+- `Assets/_Project/Prefabs/GameFlow/`に`StartArea.prefab`・`Checkpoint.prefab`・`GoalArea.prefab`を作成。いずれもRoot(BoxCollider Trigger + 判定Script)とVisual子オブジェクト(半透明の薄いパッド、床に沿って表示)で構成
+- Scene内に`GameFlowZones`という空の親GameObjectを作成し、`StartArea`・`Checkpoint_01`(`CheckpointIndex=0`)・`Checkpoint_02`(`CheckpointIndex=1`)・`GoalArea`の4インスタンスを配置。`GameFlowManager`のInspectorへこれら4つを明示的に登録
+- `Docs/StageAuthoring.md`を新規作成
+
+### 動作確認済み
+
+Host自身のPlayerでの操作をNew Input Systemの`QueueStateEvent`でシミュレートし、Unity Editor上のPlay Modeで確認しました。
+
+**Placement UX**
+- 右クリックでMarkerが正しい位置(Player前方+地面検出)に表示されることを確認
+- `E`キーでGhostがMarkerと同じX/Z位置に表示されることを確認(数値上、完全一致)
+- 確定後のReal DominoもMarker/Ghostと同じX/Z位置にSpawnすることを確認(数値上、完全一致)
+- 右クリックせず`E`キーだけでもPlacement Modeに入れることを確認(フォールバック動作)
+- `Escape`でキャンセルすると、Marker・Ghostともに非表示になり、`_isPlacing`が`false`に戻ることを確認
+- READY Phaseへの遷移時、Marker表示中であれば自動的に非表示になることを確認
+
+**Domino Width**
+- Width 0.35のDominoが、垂直配置で安定して起立すること、傾斜配置で自然に倒れることを確認(いずれもStep 5と同じ精密検証手法(Ghost回転を厳密に0°/複数角度へ固定してConfirm)で確認)
+- Width 0.35のDominoでも、10個の連続配置によるChain Reactionが成立することを確認(Step 3・5と同じ「約68°で連鎖、最後の1個が完全水平」というパターンを再現)
+
+**Game Flow**
+- **BUILDING → READY**: 接続中の全Player(この検証ではHost 1人、または疑似的にClient分も含めた判定ロジック)がStart Area内にいる場合にのみREADYへ遷移することを確認。1人でも外に出るとBUILDINGへ戻ることを確認
+- **READY → RUNNING**: `F`キーで`RequestStartChallengeRpc()`が送信され、Host側でREADY状態かつ全員Start Area内であることを再検証した上でRUNNINGへ遷移することを確認。SUCCESS中に`RequestStartChallengeRpc()`を呼んでも何も起きないことを確認
+- **BUILDING中のAccidental Fall**: BUILDING中にStart Area内でDominoを倒しても(90°まで完全に倒れることを確認済み)、`StartTriggered`・`GamePhase`ともに変化しないことを確認
+- **RUNNING開始前から倒れていたDominoの除外**: BUILDING中に倒したDominoがStart Area内に残ったままRUNNINGへ遷移させても、そのDominoは除外リストに入り`StartTriggered`が`false`のままであることを確認。同じRUNNING中に**新しく**倒したDominoで正しく`StartTriggered=true`になることを確認
+- **Checkpoint順序判定**: CP2(`CheckpointIndex=1`)を先に倒しても`CheckpointProgress`が0のままであることを確認。その後CP1(`CheckpointIndex=0`)を正しい順序で倒すと、既に倒れていたCP2の分もまとめて`CheckpointProgress`が2まで進む(いわゆる「追いつき」動作)ことを確認
+- **Goal Before Checkpoint**: Checkpoint未通過の状態でGoal内のDominoを倒しても、Goal自体は「満たされた」状態になるが`GamePhase`は`SUCCESS`にならないことを確認。その後Checkpointを正しい順序で全て通過させると、既に倒れていたGoalの分もまとめて即座に`SUCCESS`へ遷移することを確認
+- **Full Clear**: Start→CP1→CP2→Goalを正しい順序で倒すことで`GamePhase`が`RUNNING`→`SUCCESS`になることを確認
+- Console: 検証中に発見した実装バグ(下記参照)を修正した上で、Project由来のError/Warningが0件であることを確認
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作によるREADY/RUNNING/Placementの直接確認**: Step 4・5から持ち越しの制約で、MPPMの仮想Player(Client)プロセスへOS経由でキーボード入力を送る手段が今回も見つかりませんでした。そのため、複数Playerが実際に同時にStart Areaへ歩いて入り、READYになる様子は自動テストできておらず、`GameFlowManager`の公開メソッド(`NotifyPlayerEnteredStart`/`NotifyPlayerExitedStart`)を実際に接続しているClientのIDで直接呼び出すことで、判定ロジック自体は検証しています。**開発者ご自身での複数Player実機確認を推奨します**(手順は`StageAuthoring.md`・`GameFlow.md`を参照)
+- Domino Width 0.33 / 0.38との詳細な比較(見た目の並べ比べ)は行っていません。0.35が視覚的・物理的に問題なく機能することを確認した上で、ユーザー様の第一候補どおり採用しました
+- 3個以上のCheckpointを持つStageの実機テストは行っていません(構造上対応していますが、Prototype Sceneでは2個のまま検証しました)
+
+### 将来確認が必要な事項
+
+- **Client自身の操作によるGame Flow確認**(上記参照)
+- **バグ修正の記録**: 検証中、Play Modeを終了(Stop)する瞬間に、破棄されつつあるDominoのColliderが最後のTrigger Enter/Stay/Exitイベントを発生させ、その時点で既に`NetworkManager.Singleton`が`null`になっているために`NullReferenceException`が発生する不具合を発見しました。`DominoFallenZone.CheckDomino()`の先頭に`NetworkManager.Singleton == null`のガードを追加して修正済みです。今後、Play Mode終了直前に何らかの処理が走るコードを追加する際は、同様の「Singletonがnullになるタイミング」に注意してください
+- Checkpointの`Fallen Angle Threshold`(既定60°)は、Domino Width変更後の重心・接触ジオメトリの変化を踏まえた再検証は簡易的なものに留まっています。Stageのレイアウトによっては調整が必要になる可能性があります
+- READY判定は「Start Areaの範囲内にいるかどうか」のみで行っており、Playerがジャンプ中/落下中などでも範囲内なら即座にReadyとして扱われます。ゲームデザイン上の意図的な仕様か、将来調整すべき点かは要検討です
 
 ---
 

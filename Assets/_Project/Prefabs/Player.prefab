@@ -17,6 +17,7 @@ GameObject:
   - component: {fileID: 720650303308280578}
   - component: {fileID: 1258217538256036698}
   - component: {fileID: 532778656812165713}
+  - component: {fileID: 462152421959077259}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -231,14 +232,29 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   enterPlacementKey: 19
   cancelKey: 60
-  dominoPrefab: {fileID: 2983908500206558882, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
   ghostDominoPrefab: {fileID: 4524258262596908532, guid: d638a4bbd680aaa47af7d197dd1d279c, type: 3}
+  placementMarkerPrefab: {fileID: 39032853831113805, guid: e3e710f033c1a5648be9311d0692af7b, type: 3}
   forwardDistance: 1.2
   hoverHeight: 0.15
   groundRaycastRange: 3
   groundMask:
     serializedVersion: 2
     m_Bits: 4294967295
+  dominoRestingHeight: 0.5
+--- !u!114 &462152421959077259
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1210256795894551307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fddf7690438cb2e4fbf71f356fb3a24d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.Player.ChallengeInput
+  ShowTopMostFoldoutHeaderGroup: 1
+  startChallengeKey: 20
 --- !u!1 &2210624771682651668
 GameObject:
   m_ObjectHideFlags: 0
