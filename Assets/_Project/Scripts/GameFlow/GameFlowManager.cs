@@ -286,6 +286,7 @@ namespace Domino.GameFlow
             else
             {
                 _checkpointProgress.Value++;
+                SetPhase(GamePhase.RUNNING);
             }
 
             _expectedZoneIndex++;
