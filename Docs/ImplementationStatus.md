@@ -577,17 +577,28 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 - **Step 7.8の私自身のRegression Testでこれを検出できなかった理由**: 自動テストでは`NetworkTransform.Teleport()`でPlayerを`Y=0.1`(境界から余裕のある高さ)へ配置しており、ちょうど境界に来る自然な物理静止(`Y≈0`)のケースを一度も踏んでいませんでした。1人プレイでのReflectionベースの直接呼び出しテストでも同様に、境界ぎりぎりの数値を踏むことはありませんでした
 - F→RUNNING/Overview Cameraの実装そのものにバグは無く(前回報告の通り)、READY自体に到達できなかったことがすべての表面症状(Start Area判定・READY・F→RUNNING・Overview Camera)の単一の共通原因でした
 
+### 根本原因その2: Reconciliationが時間ベースでは走らない(境界修正だけでは不十分だった)
+
+境界許容誤差を修正した後も、開発者との2人プレイ実機テストでまだ症状が再現しました。ライブでScene状態を観測したところ、以下がわかりました。
+
+- 修正後の`ContainsWorldPoint()`は、Host(Owner=0)・Client(Owner=1)いずれのPlayer位置に対しても正しく`True`を返していました(境界バグ自体は解消されていた)
+- しかし`_playersInStartArea`にはHostのClientId(`0`)しか入っておらず、Client側のClientId(`1`)が実際にZone内にいるにもかかわらず含まれていませんでした
+- `ReconcilePlayersInStartArea()`(自己修復ロジック)自体は正しく動作すること(Reflection経由で`ReevaluateReady()`を手動実行すると即座に`[1,0]`へ正しく更新され`READY`になること)を確認しましたが、**この自己修復は`NotifyPlayerEnteredStart`/`NotifyPlayerExitedStart`/`HandleClientDisconnected`という離散的なイベントからしか呼ばれておらず、時間経過だけで自動的に再実行されることはありませんでした**。Client(Owner=1)所有のPlayerは、Server側では`Kinematic Rigidbody`+`NetworkTransform`同期によって位置が反映されるため、Server自身の`OnTriggerEnter`が確実に発火するとは限らず(Step 7/7.7で既に確認していた「Colliderの破棄時にOnTriggerExitが確実に発火するとは限らない」という教訓の別バリエーション)、一度この「発火漏れ」が起きると、その後Client側で新たな出入りイベントが発生しない限り、`_playersInStartArea`は永久にズレたまま固定されてしまう構造でした
+
 ### 今後の予防策
 
 - 境界判定・距離判定を書く際は、Rigidbody/NetworkTransformの実際の静止位置が理論値からわずかにズレることを前提に、意図的な許容誤差(epsilon)を必ず設ける
 - 自動テストでPlayerを配置する際は、境界からわずかに余裕のある位置だけでなく、**実際に自然落下・物理静止させた座標**でも最低1回は検証する
+- 「イベント発生時だけ自己修復する」設計は、そのイベント自体が確実に発火する保証がない場合(特にClient所有ObjectのServer側Trigger検知)、**時間ベースの定期実行を必ず併用する**。イベント駆動は応答性のためのFast Pathとして残しつつ、時間ベースのPollingを取りこぼしに対する最終的な保険として重ねる
 - Console上の`[GameFlowManager] Phase -> ...`ログの有無(特に`readyPlayers=X/Y`のXが増えるかどうか)は、Phase遷移が実際に発生したかどうかを判別する確実な手がかりになるため、動作が疑わしい場合はまずこのログの有無を確認する
+- 2人以上でのGameFlow検証は、可能な限り実際の2つのProcess(MPPM Host+Client、または2台のBuild)で行う。Host単独のテストでは、Client所有Objectに固有の同期・Trigger検知の問題を再現できない
 
 ### Fix
 
-- `Assets/_Project/Scripts/GameFlow/StartAreaZone.cs`の`ContainsWorldPoint()`に、`boundaryTolerance`(既定0.05m、Inspectorから調整可能)という許容誤差を追加。ワールド空間で意味のある値になるよう、`transform.lossyScale`で軸ごとに逆算してLocal空間の許容誤差へ変換しています
-- `world.y=-0.06`(意図的に許容誤差を超える位置)では引き続き`False`を返すことを確認しており、Zoneの形状自体を実質的に変えるものではなく、物理演算由来の数mm〜数cmのノイズだけを吸収する変更です
-- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一度も変更していません(`StartAreaZone.cs`はGameFlow側のファイルであり、Placement Freezeの対象外です)
+1. `Assets/_Project/Scripts/GameFlow/StartAreaZone.cs`の`ContainsWorldPoint()`に、`boundaryTolerance`(既定0.05m、Inspectorから調整可能)という許容誤差を追加。ワールド空間で意味のある値になるよう、`transform.lossyScale`で軸ごとに逆算してLocal空間の許容誤差へ変換しています。`world.y=-0.06`(意図的に許容誤差を超える位置)では引き続き`False`を返すことを確認しており、Zoneの形状自体を実質的に変えるものではなく、物理演算由来の数mm〜数cmのノイズだけを吸収する変更です
+2. `Assets/_Project/Scripts/GameFlow/GameFlowManager.cs`の`Update()`に、`readyPollInterval`(既定0.5秒)ごとに`ReevaluateReady()`を呼ぶ定期Pollingを追加(Phase が`BUILDING`/`READY`の間のみ)。既存のイベント駆動のFast Path(`OnTriggerEnter`→`NotifyPlayerEnteredStart`)はそのまま残しており、これに加えて時間ベースの安全網を重ねる形です。接続中のPlayer数ぶんしかループしないため、負荷は無視できるレベルです
+3. 両方の修正を適用した状態で、開発者ご本人による実機2人プレイ(Host+MPPM Client)で`READY`ログが正しく出力され、正常に動作することを確認していただきました
+- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一度も変更していません(`StartAreaZone.cs`/`GameFlowManager.cs`はいずれもGameFlow側のファイルであり、Placement Freezeの対象外です)
 
 ### Placement Freeze確認
 

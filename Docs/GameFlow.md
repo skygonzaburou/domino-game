@@ -311,6 +311,8 @@ private void ReconcilePlayersInStartArea()
 
 `OnTriggerEnter`/`OnTriggerExit`による即時反映(`NotifyPlayerEnteredStart`/`ExitedStart`)は引き続き残しています。これは「境界を跨いだ次の瞬間に即座に反応する」という応答性のためのFast Pathであり、`ReconcilePlayersInStartArea()`はその上に重ねる**安全網**です。Ready判定を行う`ReevaluateReady()`が呼ばれるたびに実際の座標で自己修復されるため、途中でTriggerイベントが1つ欠けても、次の判定タイミングまでには必ず正しい状態に戻ります。
 
+> **バグ修正の記録(Step 7.8.1・追補)**: 当初、`ReevaluateReady()`(したがって`ReconcilePlayersInStartArea()`)は`NotifyPlayerEnteredStart`/`ExitedStart`/`HandleClientDisconnected`という**離散的なイベントからしか**呼ばれておらず、時間経過だけで自動的に再実行されることはありませんでした。Client(Owner≠Server)所有のPlayerは、Server側では`Kinematic Rigidbody`+`NetworkTransform`同期によって位置が反映されるため、Server自身の`OnTriggerEnter`が確実に発火するとは限りません。この「発火漏れ」が一度起きると、Client側で新たな出入りイベントが発生しない限り`_playersInStartArea`が永久にズレたままになり、実際にはZone内にいるのに`READY`へ進めない、という不具合につながっていました。対策として、`GameFlowManager.Update()`に`readyPollInterval`(既定0.5秒)ごとの定期`ReevaluateReady()`呼び出しを追加し、イベント駆動のFast Pathに加えて時間ベースの安全網を重ねています。
+
 この方式は「毎Frame Scene全体からPlayerを検索する」重い構成ではありません。`ReevaluateReady()`自体がTrigger Enter/Exit・切断・Failure Reset完了時などの**離散的なタイミングでしか呼ばれない**上、ループの対象も現在接続中のPlayer数(通常数人)に限られます。
 
 ---

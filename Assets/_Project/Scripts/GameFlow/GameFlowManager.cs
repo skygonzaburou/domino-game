@@ -30,6 +30,10 @@ namespace Domino.GameFlow
         [Tooltip("FAILED状態を表示し続ける秒数(この間はDominoを削除しない)")]
         [SerializeField] private float failureDisplayDuration = 1.75f;
 
+        [Header("Ready Polling (Step 7.8.1)")]
+        [Tooltip("BUILDING/READY中、OnTriggerEnter/Exitイベントに頼らず定期的にStart Area在室状況を再検証する間隔(秒)。Client所有Playerの場合、Kinematic Rigidbody+NetworkTransform同期の組み合わせでServer側のOnTriggerEnterが発火しないケースがあるための保険")]
+        [SerializeField] private float readyPollInterval = 0.5f;
+
         private readonly NetworkVariable<GamePhase> _phase = new NetworkVariable<GamePhase>(
             GamePhase.BUILDING, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
@@ -53,6 +57,7 @@ namespace Domino.GameFlow
 
         private float _settledSince = -1f;
         private float _timeSinceLastFailureCheck;
+        private float _timeSinceLastReadyPoll;
         private bool _failureSequenceRunning;
 
         public GamePhase CurrentPhase => _phase.Value;
@@ -96,6 +101,24 @@ namespace Domino.GameFlow
         private void Update()
         {
             if (!IsServer) return;
+
+            // Periodic Ready poll (Step 7.8.1): the OnTriggerEnter/Exit "fast path" is not
+            // fully reliable for a Client-owned Player's Collider on the Server (Kinematic
+            // Rigidbody driven by NetworkTransform sync does not always raise a fresh trigger
+            // event the Server observes). Without this, a missed Enter event leaves
+            // _playersInStartArea stale indefinitely, since ReconcilePlayersInStartArea()
+            // otherwise only runs from other discrete events (Enter/Exit/Disconnect). This
+            // periodic call is the same self-healing reconciliation, just also time-driven.
+            if (_phase.Value == GamePhase.BUILDING || _phase.Value == GamePhase.READY)
+            {
+                _timeSinceLastReadyPoll += Time.deltaTime;
+                if (_timeSinceLastReadyPoll >= readyPollInterval)
+                {
+                    _timeSinceLastReadyPoll = 0f;
+                    ReevaluateReady();
+                }
+            }
+
             if (_phase.Value != GamePhase.RUNNING) return;
             if (!_startTriggered.Value) return;
 
