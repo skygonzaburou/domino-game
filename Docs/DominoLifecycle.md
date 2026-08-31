@@ -121,8 +121,25 @@ Start/Checkpoint/Goal Areaの各Zone(`DominoFallenZone`)は、`OnTriggerEnter`/`
 
 ---
 
+## 7.6. Failure Reset(全Domino一括削除)との関係(Step 7.5)
+
+Step 7.5で、`GameFlowManager`が`FAILED`到達時に**登録済み全Domino**を一括削除する仕組み(Challenge Reset)を追加しました。これは本ドキュメントで説明してきた「BUILDING中に倒れたDominoを個別に3秒後削除する」通常のCleanupとは**目的もタイミングも別物**です。
+
+| | BUILDING Cleanup(Step 7) | Failure Reset(Step 7.5) |
+|---|---|---|
+| 発生Phase | BUILDING中のみ | FAILED到達時のみ |
+| 対象 | 倒れたまま`Cleanup Delay`秒経過したDominoだけ | 登録済みDomino**全部**(倒れているか起立しているかを問わない) |
+| 判定主体 | `DominoCleanupManager.Update()`(角度+タイマー) | `GameFlowManager`(順序違反 or Chain Stop Failure) |
+| 実行API | `NetworkObject.Despawn(true)`を個別に呼ぶ | `DominoCleanupManager.DespawnAllRegistered(Action)` |
+
+`DespawnAllRegistered()`は`GameFlowManager`から呼ばれるHost専用APIで、`_tracked`リストのスナップショットを取ってから即座にリストを空にし(以後BUILDING Cleanupの`Update()`が同じDominoを二重に処理しないように)、`despawnBatchSize`(既定10個)ごとに1フレーム分`yield return null`を挟みながら`Despawn(true)`を呼ぶコルーチンです。全て完了すると渡された`onComplete`コールバックを呼び、`GameFlowManager`はこれを待ってから`GamePhase`を`BUILDING`へ戻します(詳細は`GameFlow.md`第9章を参照)。
+
+`AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold)`も同じくStep 7.5で追加したAPIで、`_tracked`の各DominoのRigidbody速度を閾値と比較するだけの読み取り専用メソッドです。`GameFlowManager`のChain Stop Failure判定(`GameFlow.md`第8章)から呼ばれますが、こちらもGameFlow状態を一切書き換えません。
+
+---
+
 ## 8. 既知の制約・今後の検討事項
 
 - **Object Poolingは未導入**: 現時点ではSpawn/Despawnのたびに実際にGameObjectを生成・破棄しています。将来的にDomino数が大幅に増える場合はPoolingの検討余地がありますが、Step 7では通常のNetwork Spawn/Despawn Lifecycleの動作確認を優先しています
-- **SUCCESS後のリセットは未実装**: SUCCESS到達後、コースを最初から作り直す(Dominoを一括削除する)機能はまだありません。将来のStage Reset機能で扱う予定です
-- **Clear Judgementの「まとめて追いつく」既知の課題**: `GameFlow.md`の第5章を参照してください。Step 7のCleanupとは無関係な、別の既知の課題です
+- **SUCCESS後のリセットは未実装**: SUCCESS到達後、コースを最初から作り直す(Dominoを一括削除する)機能はまだありません(FAILED後のResetとは別に、SUCCESS後のRetry/Next Stageとして将来のStepで扱う予定です)
+- ~~Clear Judgementの「まとめて追いつく」既知の課題~~: **Step 7.5で解消済みです**。`GameFlow.md`の第5章を参照してください

@@ -5,6 +5,7 @@ namespace Domino.GameFlow
         BUILDING,
         READY,
         RUNNING,
-        SUCCESS
+        SUCCESS,
+        FAILED
     }
 }

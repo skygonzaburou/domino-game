@@ -1,3 +1,5 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -23,10 +25,15 @@ namespace Domino.DominoSystem
         [Tooltip("何秒おきに登録Dominoの状態を確認するか")]
         [SerializeField] private float checkInterval = 0.2f;
 
+        [Header("Batch Despawn (Step 7.5)")]
+        [Tooltip("DespawnAllRegistered()実行時、1Frameあたり何個までDespawnするか(Transport Queueへの負荷分散用)")]
+        [SerializeField] private int despawnBatchSize = 10;
+
         private class TrackedDomino
         {
             public NetworkObject NetworkObject;
             public Transform Transform;
+            public Rigidbody Rigidbody;
             public float FallenSince = -1f;
         }
 
@@ -44,8 +51,63 @@ namespace Domino.DominoSystem
             _tracked.Add(new TrackedDomino
             {
                 NetworkObject = dominoNetworkObject,
-                Transform = dominoNetworkObject.transform
+                Transform = dominoNetworkObject.transform,
+                Rigidbody = dominoNetworkObject.GetComponent<Rigidbody>()
             });
+        }
+
+        // Used by GameFlowManager's Chain Stop Failure monitor (RUNNING only). Reuses this
+        // Manager's existing Register-on-Spawn list instead of a separate scene search, and
+        // never writes any GameFlow state itself - it only answers "is anything still moving".
+        public bool AnyTrackedDominoActive(float linearVelocityThreshold, float angularVelocityThreshold)
+        {
+            float linSq = linearVelocityThreshold * linearVelocityThreshold;
+            float angSq = angularVelocityThreshold * angularVelocityThreshold;
+
+            for (int i = 0; i < _tracked.Count; i++)
+            {
+                TrackedDomino tracked = _tracked[i];
+                if (tracked.NetworkObject == null || !tracked.NetworkObject.IsSpawned) continue;
+                if (tracked.Rigidbody == null) continue;
+
+                if (tracked.Rigidbody.linearVelocity.sqrMagnitude > linSq) return true;
+                if (tracked.Rigidbody.angularVelocity.sqrMagnitude > angSq) return true;
+            }
+
+            return false;
+        }
+
+        // Server-only Challenge Reset API (Step 7.5). Despawns every currently-registered
+        // Domino - regardless of BUILDING-only Cleanup's own fallen/delay judgement - spread
+        // across multiple frames so a large Stage doesn't Despawn hundreds of NetworkObjects
+        // in one frame (see Step 5's UnityTransport Receive Queue warning). Does not touch
+        // GameFlow state; the caller (GameFlowManager) is responsible for Phase/progress.
+        public void DespawnAllRegistered(Action onComplete)
+        {
+            StartCoroutine(DespawnAllRegisteredRoutine(onComplete));
+        }
+
+        private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
+        {
+            var toDespawn = new List<NetworkObject>(_tracked.Count);
+            for (int i = 0; i < _tracked.Count; i++)
+            {
+                NetworkObject no = _tracked[i].NetworkObject;
+                if (no != null && no.IsSpawned) toDespawn.Add(no);
+            }
+            _tracked.Clear();
+
+            int count = 0;
+            for (int i = 0; i < toDespawn.Count; i++)
+            {
+                NetworkObject no = toDespawn[i];
+                if (no != null && no.IsSpawned) no.Despawn(true);
+
+                count++;
+                if (count % despawnBatchSize == 0) yield return null;
+            }
+
+            onComplete?.Invoke();
         }
 
         private void Update()

@@ -66,7 +66,7 @@ namespace Domino.GameFlow
             if (IsFallen(dominoTransform))
             {
                 IsSatisfied = true;
-                GameFlowManager.Instance.OnZoneStateChanged();
+                GameFlowManager.Instance.OnZoneFallen(this);
             }
         }
 

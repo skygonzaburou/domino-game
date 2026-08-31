@@ -1,6 +1,8 @@
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using Domino.DominoSystem;
 
 namespace Domino.GameFlow
 {
@@ -12,6 +14,20 @@ namespace Domino.GameFlow
         [SerializeField] private StartAreaZone startArea;
         [SerializeField] private CheckpointZone[] checkpoints;
         [SerializeField] private GoalAreaZone goalArea;
+
+        [Header("Failure Detection")]
+        [Tooltip("この速度(m/秒)未満なら「静止している」とみなす")]
+        [SerializeField] private float linearVelocityThreshold = 0.02f;
+        [Tooltip("この角速度(ラジアン/秒)未満なら「静止している」とみなす")]
+        [SerializeField] private float angularVelocityThreshold = 0.05f;
+        [Tooltip("StartTriggered後、登録済み全Dominoがこの秒数連続で静止し続けたらFAILEDとする")]
+        [SerializeField] private float failureSettleDuration = 1.75f;
+        [Tooltip("何秒おきにDominoの静止状態を確認するか")]
+        [SerializeField] private float failureCheckInterval = 0.25f;
+
+        [Header("Failure Reset")]
+        [Tooltip("FAILED状態を表示し続ける秒数(この間はDominoを削除しない)")]
+        [SerializeField] private float failureDisplayDuration = 1.75f;
 
         private readonly NetworkVariable<GamePhase> _phase = new NetworkVariable<GamePhase>(
             GamePhase.BUILDING, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -25,6 +41,19 @@ namespace Domino.GameFlow
         private readonly HashSet<ulong> _playersInStartArea = new HashSet<ulong>();
         private List<CheckpointZone> _orderedCheckpoints;
 
+        // Ordered [Start, CP0, CP1, ..., Goal]. Progress is driven purely by which of these
+        // fires next during RUNNING - no rescanning of other zones' state (see OnZoneFallen).
+        private List<DominoFallenZone> _orderedZones;
+        private int _expectedZoneIndex;
+
+        // Blocks BUILDING->READY after a Failure reset until every currently-connected
+        // Player has left the Start Area at least once (see ReevaluateReady).
+        private bool _readyRearmPending;
+
+        private float _settledSince = -1f;
+        private float _timeSinceLastFailureCheck;
+        private bool _failureSequenceRunning;
+
         public GamePhase CurrentPhase => _phase.Value;
         public int CheckpointProgress => _checkpointProgress.Value;
         public bool StartTriggered => _startTriggered.Value;
@@ -34,6 +63,10 @@ namespace Domino.GameFlow
             Instance = this;
             _orderedCheckpoints = new List<CheckpointZone>(checkpoints);
             _orderedCheckpoints.Sort((a, b) => a.CheckpointIndex.CompareTo(b.CheckpointIndex));
+
+            _orderedZones = new List<DominoFallenZone> { startArea };
+            _orderedZones.AddRange(_orderedCheckpoints);
+            _orderedZones.Add(goalArea);
         }
 
         public override void OnNetworkSpawn()
@@ -46,6 +79,40 @@ namespace Domino.GameFlow
         {
             if (!IsServer) return;
             NetworkManager.OnClientDisconnectCallback -= HandleClientDisconnected;
+        }
+
+        // Chain Stop Failure monitor. Only runs RUNNING, and only once the Start Domino has
+        // actually fallen - entering RUNNING with nobody having touched anything yet must
+        // never read as "everything is settled, therefore Failed".
+        private void Update()
+        {
+            if (!IsServer) return;
+            if (_phase.Value != GamePhase.RUNNING) return;
+            if (!_startTriggered.Value) return;
+
+            _timeSinceLastFailureCheck += Time.deltaTime;
+            if (_timeSinceLastFailureCheck < failureCheckInterval) return;
+            _timeSinceLastFailureCheck = 0f;
+
+            bool anyActive = DominoCleanupManager.Instance != null &&
+                DominoCleanupManager.Instance.AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold);
+
+            if (anyActive)
+            {
+                _settledSince = -1f;
+                return;
+            }
+
+            if (_settledSince < 0f)
+            {
+                _settledSince = Time.time;
+                return;
+            }
+
+            if (Time.time - _settledSince >= failureSettleDuration)
+            {
+                TriggerFailure();
+            }
         }
 
         private void HandleClientDisconnected(ulong clientId)
@@ -71,7 +138,13 @@ namespace Domino.GameFlow
         private void ReevaluateReady()
         {
             if (!IsServer) return;
-            if (_phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS) return;
+            if (_phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED) return;
+
+            if (_readyRearmPending)
+            {
+                if (_playersInStartArea.Count > 0) return;
+                _readyRearmPending = false;
+            }
 
             bool allReady = AllConnectedPlayersInStartArea();
 
@@ -106,38 +179,90 @@ namespace Domino.GameFlow
 
         private void BeginRun()
         {
+            ResetRunState();
+            SetPhase(GamePhase.RUNNING);
+        }
+
+        private void ResetRunState()
+        {
             _checkpointProgress.Value = 0;
             _startTriggered.Value = false;
+            _expectedZoneIndex = 0;
+            _settledSince = -1f;
+            _timeSinceLastFailureCheck = 0f;
 
             startArea.OnRunStart();
             foreach (var cp in _orderedCheckpoints) cp.OnRunStart();
             goalArea.OnRunStart();
-
-            SetPhase(GamePhase.RUNNING);
         }
 
-        // Called by zones (Host-only, since only the server ever sets IsSatisfied=true)
-        // whenever their Fallen condition newly becomes true.
-        public void OnZoneStateChanged()
+        // Called by a Zone (Host-only) whenever a Domino freshly falls inside it during
+        // RUNNING. Whether this counts as progress depends solely on whether this Zone is
+        // the one currently expected next - a Zone that already fired earlier this run
+        // can never fire again (DominoFallenZone.IsSatisfied latches), and a Zone firing
+        // out of order fails the run instead of being silently ignored or catching up
+        // other Zones' state.
+        public void OnZoneFallen(DominoFallenZone zone)
         {
             if (!IsServer) return;
             if (_phase.Value != GamePhase.RUNNING) return;
 
-            if (!startArea.IsSatisfied) return;
-            _startTriggered.Value = true;
-
-            int progress = 0;
-            foreach (var cp in _orderedCheckpoints)
+            int firedIndex = _orderedZones.IndexOf(zone);
+            if (firedIndex != _expectedZoneIndex)
             {
-                if (!cp.IsSatisfied) break;
-                progress++;
+                TriggerFailure();
+                return;
             }
-            _checkpointProgress.Value = progress;
 
-            if (progress >= _orderedCheckpoints.Count && goalArea.IsSatisfied)
+            if (zone == goalArea)
             {
                 SetPhase(GamePhase.SUCCESS);
+                return;
             }
+
+            if (zone == startArea)
+            {
+                _startTriggered.Value = true;
+            }
+            else
+            {
+                _checkpointProgress.Value++;
+            }
+
+            _expectedZoneIndex++;
+        }
+
+        private void TriggerFailure()
+        {
+            if (_failureSequenceRunning) return;
+            _failureSequenceRunning = true;
+            SetPhase(GamePhase.FAILED);
+            StartCoroutine(FailureResetSequence());
+        }
+
+        private IEnumerator FailureResetSequence()
+        {
+            yield return new WaitForSeconds(failureDisplayDuration);
+
+            bool despawnComplete = false;
+            if (DominoCleanupManager.Instance != null)
+            {
+                DominoCleanupManager.Instance.DespawnAllRegistered(() => despawnComplete = true);
+            }
+            else
+            {
+                despawnComplete = true;
+            }
+            yield return new WaitUntil(() => despawnComplete);
+
+            ResetRunState();
+            _readyRearmPending = true;
+            _failureSequenceRunning = false;
+            SetPhase(GamePhase.BUILDING);
+
+            // In case every Player already left the Start Area while RUNNING/FAILED, clear
+            // the re-arm block immediately instead of waiting for the next Enter/Exit event.
+            ReevaluateReady();
         }
 
         private void SetPhase(GamePhase newPhase)

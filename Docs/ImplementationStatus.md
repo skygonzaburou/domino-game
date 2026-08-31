@@ -371,6 +371,51 @@ Clear Judgementの厳密化、FAILED Phase、Failure判定、Time Attack、Resul
 
 ---
 
+## Step 7.5: Strict Clear / Failure / Reset
+
+Step 7.5では、Step 6以来の「Zoneが一度Satisfiedになれば、あとから前段の条件が揃った時点でProgressが追いつく」というClear判定の緩さ(`GameFlow.md`に記録していた既知の課題)を廃止し、`GamePhase.FAILED`を新設した上で、正しい順序判定・Chain Stop Failure判定・Failure後のDomino一括削除とProgress Reset・Ready Re-armまでを実装しました。Placement/Marker/Ground Raycast(Step 7.1)、BUILDING中の個別Cleanup(Step 7)、Domino Physics、Network Authorityには一切変更を加えていません。「READY中はPlacement不可」も既存仕様のまま維持しています。
+
+### 実装済み
+
+- `GamePhase.cs`に`FAILED`を追加(`BUILDING`/`READY`/`RUNNING`/`SUCCESS`/`FAILED`の5値)
+- `GameFlowManager.cs`を全面的に書き換え
+  - `_orderedZones`(`[Start, CP0, CP1, ..., Goal]`)と`_expectedZoneIndex`を新設。旧`OnZoneStateChanged()`(全Zone再スキャン)を廃止し、`OnZoneFallen(DominoFallenZone zone)`に置き換え。発火したZoneが`_expectedZoneIndex`と一致すれば1つ進め、一致しなければ即`TriggerFailure()`
+  - Chain Stop Failure監視用の`Update()`を新設(`StartTriggered`後のみ動作)。`DominoCleanupManager.AnyTrackedDominoActive()`を`failureCheckInterval`(既定0.25秒)おきに呼び、全Dominoが`failureSettleDuration`(既定1.75秒)連続で静止したら`TriggerFailure()`
+  - `TriggerFailure()` → `SetPhase(FAILED)` → `failureDisplayDuration`(既定1.75秒)待機 → `DominoCleanupManager.DespawnAllRegistered()`完了待ち → `ResetRunState()`(Progress/StartTriggered/ExpectedZoneIndex/全ZoneのRunStart状態をリセット) → `_readyRearmPending = true` → `SetPhase(BUILDING)` → `ReevaluateReady()`、という一連のコルーチン(`FailureResetSequence()`)を追加
+  - `ReevaluateReady()`に`_readyRearmPending`のガードを追加。Failure Reset後、`_playersInStartArea.Count`が一度`0`になるまで`READY`へ進めないようにした
+  - `BeginRun()`/Failure Resetの両方から共通の`ResetRunState()`を呼ぶよう整理(進捗リセットロジックの重複を排除)
+- `DominoFallenZone.cs`: `CheckDomino()`の通知先を`GameFlowManager.Instance.OnZoneStateChanged()`から`GameFlowManager.Instance.OnZoneFallen(this)`に変更(Zone自身の`IsSatisfied`ラッチ・`OnRunStart()`の除外ロジック自体は無変更)
+- `DominoCleanupManager.cs`に2つのAPIを追加
+  - `AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold)`: 登録済みDominoのRigidbody速度を閾値と比較するだけの読み取り専用メソッド
+  - `DespawnAllRegistered(Action onComplete)`: 登録済み全DominoをBatch Despawnするコルーチン(`despawnBatchSize`既定10個ごとに1フレーム分`yield return null`)。合わせて`TrackedDomino`に`Rigidbody`参照をキャッシュ(`Register()`時に`GetComponent`)し、`Update()`の`Transform`アクセスと同じパターンで揃えた
+
+### 動作確認済み
+
+Host自身の操作(genuine Input System経由のFキー含む)と`DominoSpawner.TryPlaceDomino()`の直接呼び出しを組み合わせ、Unity Editor上のPlay Modeで確認しました。テストごとに`failureSettleDuration`/`failureDisplayDuration`/`cleanupDelay`を一時的に調整し、余裕を持って検証しています。
+
+- **正常ルート**: RUNNING→START→CP1→CP2→GOALの正しい順序でSUCCESSに到達し、SUCCESS後もDominoが4個とも削除されずに残ることを確認
+- **CP2 First(Wrong Order)**: STARTの後、CP1を飛ばしてCP2で新たにDominoを倒すと即`FAILED`になり、`failureDisplayDuration`経過後に全Domino削除・Progress Reset・`BUILDING`復帰まで自動で完了することを確認
+- **Before START**: STARTがまだ倒れていない状態でCP1のFresh Fallen Eventが発生すると`FAILED`になることを確認
+- **Pre-Fallen(除外)**: BUILDING中にCP2内へ倒れた状態のDominoを事前に置いた上でRUNNINGへ入っても、即座に`FAILED`にはならず(`_excludedDominoes`により除外)、`GamePhase`が`RUNNING`のまま`CheckpointProgress=0`を維持することを確認
+- **Chain Stop Failure**: STARTのみ倒し、後続のDominoを一切置かずに放置すると、`failureSettleDuration`経過後に`FAILED`へ遷移し、Reset完了まで自動で進むことを確認。`AnyTrackedDominoActive()`が実際に落下中のDominoを「Active」と検出すること自体は、物理シミュレーションが往復呼び出しの間に完了してしまい直接確認できませんでしたが、静止後に確実に`FAILED`が発生することは複数回確認しました
+- **Ready Re-arm**: Failure Reset直後、`_playersInStartArea`に要素が残っている間は`BUILDING`から`READY`へ進まないこと、全ClientIdを`NotifyPlayerExitedStart`で退出させると`_readyRearmPending`が解除されること、その後再度`NotifyPlayerEnteredStart`で全員入れると`READY`へ正しく遷移することを確認
+- **F → RUNNING(genuine input)**: Input SystemのQueueStateEvent経由の実際のFキー入力で`READY → RUNNING`へ遷移することを確認(Step 7.1のバグ修正が引き続き有効であることも合わせて確認)
+- **Placement / BUILDING Cleanup / RUNNING時Cleanup無効**: いずれも従来通り動作することを確認(Placement ConfirmはRPC経由のため、既知のテストハーネス起因の間欠的な無反応が一度発生しましたが、直接`TryPlaceDomino()`呼び出しで根本経路は健全であることを確認済み。詳細はStep 7の記録を参照)
+- Console: Error 0件
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作による直接確認**: 従来通りの制約(MPPM仮想Playerウィンドウへのキーボード入力自動送信不可)により、Client自身がCheckpointを間違った順序で倒す/Chainを止める操作を自動テストできていません。判定ロジック自体は「誰が倒したか」に依存しない設計のため、Host側の確認結果がClientにも同様に当てはまるはずです
+- `AnyTrackedDominoActive()`が「動いている」と判定する瞬間そのものを、往復呼び出しのタイミングの都合上ピンポイントで観測できませんでした(常に「まだ0速度」か「もう静止済み」のいずれかを観測)。閾値比較のロジック自体はシンプルであり、静止後に確実にFailureが発生する結果からも機能していると判断していますが、開発者ご自身での実プレイ確認(ゆっくり途中で止まるChainを作る等)を推奨します
+
+### 将来確認が必要な事項
+
+- `linearVelocityThreshold`(既定0.02)/`angularVelocityThreshold`(既定0.05)/`failureSettleDuration`(既定1.75秒)/`failureCheckInterval`(既定0.25秒)/`failureDisplayDuration`(既定1.75秒)/`despawnBatchSize`(既定10)はいずれもStageの規模・Domino密度に応じた調整余地があります
+- SUCCESS後のRetry/Next Stageは未実装のままです(Failure Resetとは別の仕組みとして将来実装予定)
+- 大量(数百個規模)のDominoでのBatch Despawnの実際のパフォーマンスは、今回のPrototype Stage規模(数個〜20個程度)でのみ確認しています
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
