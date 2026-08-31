@@ -323,6 +323,8 @@ public void RequestStartChallengeRpc(RpcParams rpcParams = default)
 
 `ChallengeInput.cs`をあえて`PlacementController`と別スクリプトにしているのは、これが配置操作とは無関係な単発の入力トリガーであり、将来UIボタンに置き換える際に配置システムを一切触らずに済むようにするためです。
 
+> **開発時の注意(Step 7.8.1)**: Unity Editor上のPlay Modeでは、Input System設定`editorInputBehaviorInPlayMode = PointersAndKeyboardsRespectGameViewFocus`により、**Game ViewウィンドウがOSフォーカスを持っていない間、キーボード/マウス入力そのものが無視されます**。「Fキーを押してもRUNNINGへ進まない」「WASDで動かない」といった症状に遭遇した場合、まずGame Viewを一度クリックしてフォーカスを与えてから再試行してください。ビルド済みのPlayerではこの制約は発生しません。Console上の`[GameFlowManager] Phase -> ...`ログの有無で、「Phase遷移自体が起きたか」を切り分けられます。
+
 ---
 
 ## 8. Chain Stop Failure判定(Step 7.5で追加)

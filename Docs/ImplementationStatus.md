@@ -545,6 +545,51 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 
 ---
 
+## Step 7.8.1: GameFlow Regression Restoration
+
+開発者から、「Step 7.7までは動作していたStart Area判定/READY/F→RUNNING/Overview Cameraが、Step 7.8時点の実機操作では動作しない」との報告があり、Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`、Step 7.8で承認済みのUX)には一切手を加えないという制約のもとで調査しました。結論として、**コードレベルの回帰(Regression)は見つかりませんでした**。`git diff 67ec5c8..ce729df`(Step 7.7→Step 7.8)は`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`/Docsのみを含み、`GameFlowManager.cs`/`StartAreaZone.cs`/`ChallengeInput.cs`/`ThirdPersonCamera.cs`/`OverviewCameraPoint.cs`/`Player.prefab`はいずれも1バイトも変化していません。このStepでの最終的なコード差分は**ゼロ**です(`git diff --stat`で確認)。
+
+### 調査方法
+
+コードの差分が無いことだけをもって「無関係」と判断せず、以下をPlay Modeで実機的に検証しました(開発者からの「Reflectionでメソッドを直接呼んで成功しただけではRegression Passとしない」というご指示に従い、可能な限り本物の仕組みを経由させています)。
+
+- **Player.prefabの構成**: `ChallengeInput`(enabled=True, IsOwner=True)、`CapsuleCollider`(isTrigger=False)、Tag=`Player`、Layer=`Player`(9)を確認
+- **StartAreaZone(Scene上の`StartArea`)の構成**: `BoxCollider`(isTrigger=True, enabled=True)、Tag=`Untagged`、Layer=`Default`(0)を確認
+- **Physics Layer Collision Matrix**: `Player`レイヤーと`Default`/`Domino`/`Player`レイヤーの間で`IgnoreCollision`が すべて`False`(=衝突・Trigger判定は妨げられていない)ことを確認
+- **`GameFlowManager`のZone参照**(`SerializedObject`経由): `startArea`→`StartArea`、`goalArea`→`GoalArea`、`checkpoints[0]`→`Checkpoint_01`、`checkpoints[1]`→`Checkpoint_02`、すべて非NULLかつ重複無しを確認
+- **本物のUnity Trigger callback経由でのStart Area検知**: `NetworkTransform.Teleport()`でHost Playerを物理的にStart Area範囲内へ移動させ、`StartAreaZone.OnTriggerEnter`→`GameFlowManager.NotifyPlayerEnteredStart()`が実際に発火し、`_playersInStartArea`が正しく更新されることを確認(Reflectionで直接メソッドを呼んだのではなく、Unity自身のPhysics Engineが発火させたイベントを観測)
+- **本物のInput System経由でのF→RUNNING**: `InputSystem.QueueStateEvent`でF キーイベントをキューし、Unity自身の`Update()`スケジューリングが`ChallengeInput.Update()`→`wasPressedThisFrame`→`RequestStartChallengeRpc()`→`GameFlowManager.BeginRun()`→`SetPhase(RUNNING)`という一連の経路を実際に通ることを、Console上の`[GameFlowManager] Phase -> RUNNING`ログで複数回確認
+- **Overview Cameraの実際の遷移**: RUNNING中、Main Cameraの実際のPosition/Rotation/FOVが`OverviewCameraPoint`の設定値(`(-8,12,-14)`, `(40.6,0,0)`, FOV 65)と一致することを確認。READY/BUILDINGに戻るとThird Personカメラ(Player追従、距離約4.7)へ正しく復帰することも確認
+- **FAILED→BUILDING Reset、Ready Re-arm Fix(Step 7.7)の健全性**: Player がStart Areaに留まったままFAILEDへ遷移させ、`_readyRearmPending=True`によって即READYへ戻らないこと(Step 7.7の修正が退行していないこと)、Playerが一度退出→再入場することで正しくREADYへ戻ることを、**3回連続の Attempt サイクル**で確認(すべて`[GameFlowManager] Phase -> ...`ログで裏付け)
+- 上記すべてのテストを通じて、Console上のError/Warningは**0件**
+
+### なぜStep 7.8ではなく、より詳しい調査が必要だったか(参考)
+
+上記の検証を1回目に試みた際、2回目以降のF キー入力が`wasPressedThisFrame`を検出できないという事象が再現しました。一時的な診断ログ(`ChallengeInput.Update()`内、コミット前に削除済み)を仕込んで原因を追ったところ、Unity Editor の Input System設定`editorInputBehaviorInPlayMode = PointersAndKeyboardsRespectGameViewFocus`(Game ViewがOSフォーカスを持っていない間、Keyboard/Mouse入力を無視・リセットする)が原因であることを特定しました。Game Viewへ明示的に`Focus()`した直後であれば、F キー入力は毎回・即座(キュー投入の翌フレーム以内)に本物の`RequestStartChallengeRpc()`呼び出しへつながることを2回、独立して確認しています。この設定自体はStep 7.7/7.8間で変更されておらず(そもそもプロジェクト設定であり、コード差分の対象外)、Step 2の`ImplementationStatus.md`(78行目)で既に「MPPMのVirtual PlayerウィンドウがOSフォーカスを失うと停止して見える」という類似の既知事象として記録されていたものと同根です。
+
+### 根本原因の結論
+
+- **Start Area検知/READY/F→RUNNING/Overview Cameraのいずれについても、コード・Prefab・Scene参照・Layer設定に問題は見つかりませんでした**。すべて本物の仕組み(Physics Trigger、Input System、RPC、Camera Blend)を経由して正常に動作することを確認しています
+- 開発者が実機で遭遇した不具合の技術的な原因は特定できていませんが、有力な仮説は「F キー入力(あるいはそれ以前のWASD移動)を送った瞬間、Game ViewウィンドウがOSフォーカスを持っていなかった」というものです。上記`editorInputBehaviorInPlayMode`設定は、Game Viewが非フォーカスの間キーボード入力を丸ごと無視するため、Start Area進入のための移動そのものが実際にはPlayerへ届いていなかった場合、Start Area判定/READY/F/Overview Cameraの4つすべてが「動いていないように見える」という今回の報告と矛盾なく一致します
+- **今回、私(Claude)側では「Step 7.8のRegression Testでは成功と報告したが実際は動いていなかった」原因を再現できませんでした**。Step 7.8時点のRegression Testは、GameFlow部分についてReflection経由の直接呼び出しに依存する割合が高く(Placement部分のgenuine Input検証に比べて手薄でした)、これは実プレイでの検証としては不十分だったという点は事実であり、今回それを是正し、genuineな経路での検証に置き換えました
+
+### 今後の予防策
+
+- GameFlow関連のRegression Testでは、今後もReflection経由の直接呼び出しのみに頼らず、可能な限り本物のPhysics Trigger/Input System/RPCの経路を経由させて確認する
+- 手動プレイ時にF キーやWASDが反応しない場合は、まずGame Viewウィンドウを一度クリックしてOSフォーカスを与えてから再試行することを推奨する(Editor Play Mode特有の制約であり、実際にビルドしたPlayerでは発生しません)
+- Console上の`[GameFlowManager] Phase -> ...`ログは、Phase遷移が実際に発生したかどうかを判別する確実な手がかりになるため、動作が疑わしい場合はまずこのログの有無を確認する
+
+### Fix
+
+- コード・Prefab・Scene設定への変更は行っていません(`git diff --stat`が空であることを確認済み)。調査のために`ChallengeInput.cs`へ一時的な診断ログを追加しましたが、検証完了後に完全に元の内容へ復元し、`git diff`で元のコミット内容と完全一致することを確認しています
+- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一度も変更していません
+
+### Placement Freeze確認
+
+- 上記ファイル群は今回のセッションを通じて一度も編集していません(`git diff --stat`が空であることがその直接的な証拠です)。Character/Nose正面基準のMarker、1.2m Placement Distance、Ground Raycast、Live Marker、Right-Click Lock、E限定のPlacement Mode、A/D Free Yaw Rotation、Ghost Wobble、Left-Click Confirm、Escape Cancel、Network Placement Request、Host-authoritative Spawnは、Step 7.8時点の実装から一切変更されていません
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
