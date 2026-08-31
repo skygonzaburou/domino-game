@@ -18,11 +18,16 @@ Player (Root)                         ← ローカル座標 (0, 0.05, 0) でSpa
 ├─ PlacementController                Domino配置(Placement Mode)のロジック(Step 4で追加)
 ├─ Visual                             (子) 見た目(現状はCapsule)
 │   ├─ MeshFilter (Capsule)
-│   └─ MeshRenderer
+│   ├─ MeshRenderer
+│   └─ Nose                           (孫) Step 7.7で追加。正面方向を示す小さな赤い球
+│       ├─ MeshFilter (Sphere)
+│       └─ MeshRenderer (Material: NoseMaterial)
 └─ CameraTarget                       (子) ローカル座標 (0, 1.6, 0) = 頭の高さの目印
 ```
 
 Rootには「物理」「ネットワーク」「入力ロジック」だけが集まっていて、「見た目(Visual)」だけが分離されています。これは意図的な設計で、理由は本ドキュメントの最後の章(Local/Remoteの違い)とArchitecture.mdで触れています。
+
+**Nose(Step 7.7で追加)**: CapsuleだけのPrototype Characterでは正面がどちらか視覚的に分かりづらいという指摘を受け、Visual配下のローカル座標`(0, 0.6, 0.5)`(+Z方向、`PlayerMotor`が前進方向として扱う軸と一致)へ小さな赤い球を追加しました。Collider・Rigidbody・NetworkObject・NetworkTransform・Scriptはいずれも持たない、純粋な見た目専用の子オブジェクトです。Player本体のTransform(Owner AuthorityでNetwork同期される)にそのまま追従するだけなので、Player自身の同期・Physics設定には一切影響しません。将来Meshy等で正式なCharacter Modelに差し替える際は、この`Nose`ごと置き換える想定です。
 
 ---
 
@@ -118,9 +123,11 @@ Netcode for GameObjectsが「このGameObjectはネットワークで管理す�
 
 ---
 
-## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化、Step 7.1でAnchor追従を安定化)
+## 3. Placement Mode(Ghost Domino配置)の仕組み(Step 4で追加、Step 5でNetwork対応、Step 6でMarker追加、Step 6.1でLive Preview化、Step 7.1でAnchor追従を安定化、Step 7.7でCamera Aim基準へ再設計)
 
 Step 4で、Playerが実際にDominoを配置するための`PlacementController`と`GhostDomino`を追加しました。Ghostは今も`NetworkObject`を持たない**各Playerのローカル画面だけで完結する機能**のままですが、Step 5で確定後のReal Dominoの生成方法が「ローカルInstantiate」から「HostへのRPCリクエスト」に変わりました(詳細は本章末とNetworking.mdの第17〜19章を参照)。Step 6では、床にPlacement位置を示す**Placement Marker**を追加しました。Step 6.1では、このMarkerを「右クリックしないと表示されない」ものから「BUILDING中は常に現在の配置候補を示し続けるLive Preview」に改善しました。
+
+**Step 7.7で、Placement位置の基準を「Player前方」から「Camera Aim(画面中央が指す床の位置)」へ変更しました。** これは実際にプレイした結果、「Characterがどちらを向いているか」にPlacement位置が強く依存し、狙った場所へ置きにくいというフィードバックを受けたものです。以下の説明は**Step 7.7時点の実装**を基準にしています。
 
 ### 入力の役割(Step 6.1で確定)
 
@@ -140,15 +147,41 @@ Step 4で、Playerが実際にDominoを配置するための`PlacementController
 [SerializeField] private Key cancelKey = Key.Escape;            // キャンセルキー
 [SerializeField] private GameObject ghostDominoPrefab;           // Ghost Dominoの元プレハブ
 [SerializeField] private GameObject placementMarkerPrefab;       // Step 6で追加。Placement Markerの元プレハブ
-[SerializeField] private float forwardDistance = 1.2f;           // Player前方何mに配置位置を出すか
+[SerializeField] private float maxPlacementRange = 2.7f;         // Step 7.7で追加。Player中心からの水平距離で置ける最大範囲
 [SerializeField] private float hoverHeight = 0.15f;              // Ghostの首振りピボットを地面から何m浮かせるか(あくまでGhostの見た目用)
-[SerializeField] private float groundRaycastRange = 3f;          // 地面検出Raycastの長さ
-[SerializeField] private LayerMask groundMask = Everything except "Domino"; // 地面検出の対象レイヤー。Step 7.1で"Domino"Layerを除外(下記参照)
+[SerializeField] private float cameraAimRange = 50f;             // Step 7.7で追加。画面中央Raycastの最大距離(奥のStage Surface検出用)
+[SerializeField] private float groundRaycastRange = 3f;          // Range Clamp後のXZ位置で地面の高さ・傾きを検出する垂直Raycastの距離
+[SerializeField] private LayerMask groundMask = Everything except "Domino","Player"; // 地面検出の対象レイヤー。Step 7.1で"Domino"、Step 7.7で"Player"を除外(下記参照)
 [SerializeField] private float dominoRestingHeight = 0.5f;       // Real Dominoを生成するY座標(地面からDomino半分の高さ)
-[SerializeField] private float previewFollowSpeed = 240f;        // Step 7.1で追加。Live Preview Anchorの向き追従を減速させる速度上限(度/秒)
 ```
 
-`dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。
+`dominoPrefab`フィールドはStep 5で削除しました。Real Dominoの生成はHost側の`DominoSpawner`が担当するため、`PlacementController`自身はもう`Domino.prefab`への参照を持ちません。Step 7.1で追加した`previewFollowSpeed`(Player向きの急な変化を減速させる仕組み)は、Anchorの基準が下記の通りCamera Aimへ変わったことで不要になったため、Step 7.7で削除しました。
+
+### Camera Aim + Range Clamp(Step 7.7)
+
+`ComputeGroundAnchor()`は、Playerの向きではなく**Camera(画面中央)から前方へのRaycast**を使うように再設計しました。
+
+```csharp
+Camera cam = ThirdPersonCamera.Instance.GetComponent<Camera>();
+Vector3 rayOrigin = cam.transform.position;
+Vector3 rayDirection = cam.transform.forward;
+
+// 1. 画面中央のRaycastでStage Surface上の狙い位置を検出(groundMaskはDomino/Playerを除外)
+Physics.Raycast(rayOrigin, rayDirection, out RaycastHit aimHit, cameraAimRange, groundMask, ...);
+
+// 2. Player中心からの水平距離がmaxPlacementRangeを超えていたら、その方向へ最大距離までClamp
+Vector3 flatOffset = ...; // aimPoint - Player位置(Y除く)
+if (flatOffset.magnitude > maxPlacementRange) flatOffset = flatOffset.normalized * maxPlacementRange;
+
+// 3. Clamp後のXZ位置で、改めて真下へRaycastし、実際の地面の高さ・傾きを検出
+Physics.Raycast(new Vector3(candidateXZ.x, Player.y + groundRaycastRange, candidateXZ.z), Vector3.down, out RaycastHit vHit, ...);
+```
+
+**なぜPlayerからの範囲でClampするのか**: 画面奥の遠いStage Surfaceを狙っていても、実際に配置できるのはPlayerの近くだけです(`DominoSpawner.TryPlaceDomino()`が既に持つ距離Validationと矛盾しないようにするため)。`maxPlacementRange`(既定2.7m)は`DominoSpawner.maxPlacementDistance`(既定3m)より意図的に少し小さくしてあります。両者をピッタリ同じ値にすると、Rangeギリギリで確定した直後にPlayerがわずかに動いただけでHost側の距離Validationに弾かれる、という不具合が実際に発生したためです(詳細は`ImplementationStatus.md`のStep 7.7章を参照)。
+
+**なぜPlayer LayerもGround検出から除外したのか(Step 7.7)**: Camera Aimの光線は、Third Person Cameraの位置(Playerの後方)からPlayerの方向へ向かって伸びるため、そのままでは自分自身のCapsule Colliderに当たってしまいます。Step 7.1で追加した`"Domino"` Layer除外と同じ考え方で、`"Player"` Layerも新設して`groundMask`から除外しました(Physics Layer Collision MatrixはPlayer↔Domino/Ground/Player同士とも引き続き衝突する設定のままで、Raycastの対象からのみ除外しています)。
+
+**Marker/Ghost/Real Dominoの向き**: `_anchorFlatRotation`は、Player位置から狙い位置(Clamp後)へ向かう方向を基準にしています。Playerの実際の向きとは無関係に、常に「今狙っている方向」を向きます。
 
 **Single Source of Truthとしてのアンカー**: Step 6では、Marker/Ghost/Real Dominoの3者が同じ「配置位置の計算結果」を共有するように整理しました。
 
@@ -170,7 +203,7 @@ private bool _markerLocked;  // false=Preview(追従中) / true=Locked(固定)
 |---|---|---|
 | `OnNetworkSpawn()` | ネットワーク上でこのオブジェクトが実体化した直後 | 自分の持ち主でなければ`enabled = false`でコンポーネント自体を無効化(`PlayerMotor`と同じ考え方) |
 | `Update()` | 毎フレーム(Owner のみ) | まず`GameFlowManager.CurrentPhase`が`BUILDING`かどうかを確認。BUILDING中、Placement Mode外かつ`_markerLocked == false`であれば**毎フレーム**`ComputeGroundAnchor()`→`ShowMarker(Preview)`を呼び、Live Previewを常に最新の位置へ更新する(Step 6.1で追加) |
-| `ComputeGroundAnchor()` | Live Preview更新時・右クリック時・Ghost表示時に呼ばれる | Player前方・地面へのRaycastから`_anchorGroundPosition`等を計算する、位置計算の唯一の実装 |
+| `ComputeGroundAnchor()` | Live Preview更新時・右クリック時・Ghost表示時に呼ばれる | Camera Aim(画面中央)のRaycast+Range Clampから`_anchorGroundPosition`等を計算する、位置計算の唯一の実装(Step 7.7で再設計) |
 | `ShowMarker(MarkerState)` | Live Preview更新時・右クリック時(Step 6.1で追加、旧`UpdateMarker()`を置き換え) | Markerインスタンスをアンカー位置・地面の傾きに合わせて配置し、引数の状態(`Preview`/`Locked`)を`PlacementMarker.SetState()`へ伝える |
 | `EnterPlacementMode()` | `E`キーが押された時 | `_markerLocked`が`false`ならこの瞬間のPreview位置でLock(`ShowMarker(Locked)`)してからPlacement Mode開始。既にLockedならそのままGhostを表示し、`PlayerMotor.SetMovementEnabled(false)`、`ThirdPersonCamera.EnterPlacementView()`を呼ぶ |
 | `ConfirmPlacement()` | Placement Mode中に左クリックされた時 | Ghostの**回転**とアンカーの**水平位置(X/Z)**をそのまま使い、**Y座標だけ**`dominoRestingHeight`基準に再計算した上で`RequestPlacementRpc()`を呼ぶ。その後Placement Modeを終了する |
@@ -186,7 +219,22 @@ private bool _markerLocked;  // false=Preview(追従中) / true=Locked(固定)
 
 **なぜLive Previewを追加したのか(Step 6.1)**: Step 6時点では、右クリックするまでMarkerが一切表示されず、「実際に押してみるまでどこに置かれるか分からない」という操作感の課題がありました。Dominoを何十個・何百個と置くゲームであるため、この「置く前に確認できない」という小さなストレスが積み重なりやすいという指摘を受け、Preview(常時追従・薄い表示)とLocked(固定・やや濃い表示)の2状態に分けることで、「歩きながら位置を合わせる→右クリックで確定→Eで配置」という自然な操作フローを実現しました。
 
-**Performance上の配慮**: Live Previewは毎フレームRaycastを1回行いますが、これは各Player自身のローカル処理であり、Network RPC・NetworkVariable・全Domino検索・他PlayerのMarker更新は一切発生しません(Step 6.1で追加した処理はローカルPlayer1人あたり軽量なRaycast 1回のみ)。
+**Performance上の配慮**: Live Previewは毎フレームRaycastを行いますが(Step 7.7でCamera Aim用・地面高さ検出用の2回に増加)、これは各Player自身のローカル処理であり、Network RPC・NetworkVariable・全Domino検索・他PlayerのMarker更新は一切発生しません。
+
+### Screen Center Reticle(Step 7.7で追加)
+
+Camera Aimがどこを狙っているか分かりやすいよう、BUILDING中は画面中央に小さな`+`を表示します。`PlacementController.OnGUI()`で`GUI.Label`を1つ描画するだけの、Canvas/UI Toolkitを使わない最小実装です。
+
+```csharp
+private void OnGUI()
+{
+    if (!IsOwner) return;
+    if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING) return;
+    // 画面中央に "+" を描画
+}
+```
+
+`GamePhase.BUILDING`以外(READY/RUNNING/SUCCESS/FAILED)では描画をスキップするため、Reticleは自動的に非表示になります。
 
 **Live Preview Anchorの向き追従を減速させている理由(Step 7.1で追加)**: `PlayerStats.rotationSpeed`は`720度/秒`と非常に高速で、Playerが移動キーを押しながらCameraを大きく回すと、Player自身の体が(Camera相対の移動方向を追いかけて)ほぼ瞬時に向きを変えます。Step 6.1時点の`ComputeGroundAnchor()`は毎フレーム`transform.forward`をそのまま使っていたため、この「体が高速で向きを変える」場面でMarkerがPlayerの周りをぐるぐる回るように見える不具合が実プレイで見つかりました。原因はCamera Transformを直接使っていたことではなく(Anchorの基準は元からPlayer基準のままです)、Playerの体そのものが高速回転するケースで、それを毎フレーム無条件に反映していたことです。修正として、Playerの生の`transform.forward`とは別に`_previewForward`という減速版の方向ベクトルを持たせ、`Vector3.RotateTowards()`で`previewFollowSpeed`(既定240度/秒、Player本体の720度/秒よりあえて遅く設定)を上限に追従させるようにしました。Lock/Cancel/Confirm/Phase変化でLive Previewが再開する瞬間だけは`_previewForwardValid`をリセットし、その場でPlayerの実際の向きへ即座に一致させます(再開直後に「古い方向から追いつく」ような不自然な動きが出ないようにするため)。
 
@@ -292,19 +340,44 @@ sequenceDiagram
 
 ---
 
-## 4.5. RUNNING中のPlayer移動制限とOverview Camera(Step 7.6で追加)
+## 4.5. RUNNING中のPlayer移動制限とOverview Camera(Step 7.6で追加、Step 7.7でMovement Basisを再設計)
 
 RUNNING/SUCCESS/FAILED中(`GameFlowManager.IsChallengeActive == true`)、Playerの移動とカメラの挙動がBUILDING/READY時と変わります。
 
-### 移動基準がCamera相対からPlayer相対へ切り替わる理由
+### Screen-relative Movement(Step 7.7)
 
-この間、各Playerの画面は自動的にOverview Camera(Stage全体を見渡す固定視点、後述)へ切り替わります。Overview Cameraの向きはStage側で自由に設定される固定値のため、これを移動基準にしてしまうと「Wキーを押したのにどっちへ進むか予測できない」という状態になってしまいます。そこで`PlayerMotor.ApplyMovement()`は、`IsChallengeActive`の間だけ移動基準をCamera(`ThirdPersonCamera.transform`)からPlayer自身(`transform`)へ切り替えます。
+Step 7.6では、Overview Camera(後述)がPlayerの向きと無関係な固定視点になることを踏まえ、この間だけ移動基準をPlayer自身の向きへ切り替えていました。しかし実際にプレイしたところ、「画面上でWキーを押したのに、見えている方向とは違う方向へ進む」という操作感の課題が見つかりました。
+
+Step 7.7では、これを撤回し、**常に現在アクティブなCamera(BUILDING/READY中はThird Person、RUNNING/SUCCESS/FAILED中はOverview)を基準にしたScreen-relative Movement**へ統一しました。
 
 ```csharp
-Transform basis = confined || ThirdPersonCamera.Instance == null ? transform : ThirdPersonCamera.Instance.transform;
+Transform cam = ThirdPersonCamera.Instance.transform;
+Vector3 forward = Vector3.ProjectOnPlane(cam.forward, Vector3.up);
+if (forward.sqrMagnitude < 0.0001f)
+{
+    // Cameraがほぼ真下/真上を向いていてForwardの地面投影が潰れた場合、
+    // Forwardと必ず直交するUpベクトルを代わりに使う(Up自体が水平になっているはず)
+    forward = Vector3.ProjectOnPlane(cam.up, Vector3.up);
+}
+forward = forward.sqrMagnitude > 0.0001f ? forward.normalized : Vector3.forward;
+Vector3 right = Vector3.Cross(Vector3.up, forward);
 ```
 
-BUILDING/READY中の操作感(Camera相対)は一切変更していません。
+`ThirdPersonCamera.transform`自体が、Phaseに応じて(第7章で説明するブレンドにより)Third Person / Overviewのどちらの向きも自然に反映するため、`PlayerMotor`側で「今どちらのCameraか」を意識する分岐は不要です。BUILDING中のThird Personは元々そこまで急な角度にならないため、Fallback分岐が実際に使われるのはOverview Cameraが急角度に設定された場合だけです。**BUILDING/READY中の操作感は、この統一によって一切変わっていません**(元々Camera相対だったため)。
+
+### Character Rotation
+
+Playerの体は、移動している間だけ実際の移動方向(上記`direction`)へ向きます。
+
+```csharp
+if (direction.sqrMagnitude > 0.0001f)
+{
+    Quaternion targetRotation = Quaternion.LookRotation(direction, Vector3.up);
+    _rigidbody.MoveRotation(Quaternion.RotateTowards(_rigidbody.rotation, targetRotation, _stats.rotationSpeed * Time.fixedDeltaTime));
+}
+```
+
+Overview Camera自体を(マウスで)回しても、入力(WASD)が無ければPlayerの体は一切回転しません。「動いた時だけ、動いた方向を向く」というシンプルなルールで、Step 6.1以前から変更していません。
 
 ### Start Area拘束(Constraint)
 

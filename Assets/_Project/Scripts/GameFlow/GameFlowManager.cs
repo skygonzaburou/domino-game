@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using Domino.DominoSystem;
@@ -148,6 +149,8 @@ namespace Domino.GameFlow
             if (!IsServer) return;
             if (_phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED) return;
 
+            ReconcilePlayersInStartArea();
+
             if (_readyRearmPending)
             {
                 if (_playersInStartArea.Count > 0) return;
@@ -174,6 +177,31 @@ namespace Domino.GameFlow
                 if (!_playersInStartArea.Contains(clientId)) return false;
             }
             return true;
+        }
+
+        // Self-heals _playersInStartArea against each connected Player's actual current
+        // position before every Ready decision, instead of trusting OnTriggerEnter/Exit's
+        // cumulative Add/Remove history as the sole source of truth indefinitely. Bounded by
+        // the (small) connected-player count - not a scene-wide search - and only runs at
+        // discrete decision points (ReevaluateReady), not every frame.
+        private void ReconcilePlayersInStartArea()
+        {
+            if (startArea == null) return;
+
+            foreach (ulong clientId in NetworkManager.ConnectedClientsIds)
+            {
+                bool trackedInside = _playersInStartArea.Contains(clientId);
+                bool actuallyInside = NetworkManager.ConnectedClients.TryGetValue(clientId, out var client)
+                    && client.PlayerObject != null
+                    && startArea.ContainsWorldPoint(client.PlayerObject.transform.position);
+
+                if (actuallyInside && !trackedInside) _playersInStartArea.Add(clientId);
+                else if (!actuallyInside && trackedInside) _playersInStartArea.Remove(clientId);
+            }
+
+            // Drop any tracked id for a Client that has since disconnected (belt-and-suspenders
+            // alongside HandleClientDisconnected, which already removes it on the same event).
+            _playersInStartArea.RemoveWhere(id => !NetworkManager.ConnectedClientsIds.Contains(id));
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]

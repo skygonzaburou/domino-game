@@ -260,6 +260,48 @@ sequenceDiagram
 
 Failure Reset完了時にPlayerが既に全員Start Areaの外にいた場合(RUNNING中に外へ出ていた等)も取りこぼさないよう、Reset処理の最後で`ReevaluateReady()`を明示的に一度呼び、その場でフラグを解除できるようにしています。
 
+### バグ修正の記録: 2回目以降READYにならない問題(Step 7.7)
+
+Step 7.5時点の実装では、`_playersInStartArea`の更新を`OnTriggerEnter`/`OnTriggerExit`イベントの発生**だけ**に依存していました。1回目のFailure後は正しく動作しましたが、実際にプレイを重ねると、2回目以降のRe-armで`_playersInStartArea`のCountが`0`に戻らず、`READY`へ二度と進めなくなる不具合が報告されました。
+
+**原因**: Step 7で確認した「Colliderが破棄される際、`OnTriggerExit`が確実に発火するとは限らない」という教訓は、Domino以外にも当てはまりました。RUNNING/FAILED中はPlayerがStart Areaの境界ギリギリに拘束され続けており(Step 7.6のConstraint)、境界付近での高速な速度変化・Rigidbody状態変化が絡むと、`OnTriggerEnter`/`OnTriggerExit`のペアが必ずしも1:1で綺麗に発火するとは限りません。一度でもイベントが欠落すると、`_playersInStartArea`の内容は実際のPlayer位置とズレたまま**永久に**残ってしまい(TriggerイベントだけがCountを更新する唯一の経路だったため)、以後Countが正しく`0`になることはなくなり、Re-armが永遠に完了しない、という形で症状が現れていました。
+
+**修正内容**: `_playersInStartArea`を「Trigger イベントの累積結果を無条件に信じ続ける」のをやめ、**Ready判定を行う直前に必ず、現在接続中の全PlayerについてStart Area内に実際にいるかどうかを再検証・自己修復する**仕組み(`ReconcilePlayersInStartArea()`)を追加しました。
+
+```csharp
+// StartAreaZone.cs: OnTriggerEnter/Exitの履歴に関係なく、今この瞬間の座標だけで判定する
+public bool ContainsWorldPoint(Vector3 worldPosition)
+{
+    Vector3 local = transform.InverseTransformPoint(worldPosition);
+    Vector3 halfSize = _boxCollider.size * 0.5f;
+    Vector3 diff = local - _boxCollider.center;
+    return Mathf.Abs(diff.x) <= halfSize.x && Mathf.Abs(diff.y) <= halfSize.y && Mathf.Abs(diff.z) <= halfSize.z;
+}
+```
+
+```csharp
+// GameFlowManager.cs: ReevaluateReady()の冒頭で必ず呼ぶ
+private void ReconcilePlayersInStartArea()
+{
+    if (startArea == null) return;
+    foreach (ulong clientId in NetworkManager.ConnectedClientsIds)
+    {
+        bool trackedInside = _playersInStartArea.Contains(clientId);
+        bool actuallyInside = NetworkManager.ConnectedClients.TryGetValue(clientId, out var client)
+            && client.PlayerObject != null
+            && startArea.ContainsWorldPoint(client.PlayerObject.transform.position);
+
+        if (actuallyInside && !trackedInside) _playersInStartArea.Add(clientId);
+        else if (!actuallyInside && trackedInside) _playersInStartArea.Remove(clientId);
+    }
+    _playersInStartArea.RemoveWhere(id => !NetworkManager.ConnectedClientsIds.Contains(id));
+}
+```
+
+`OnTriggerEnter`/`OnTriggerExit`による即時反映(`NotifyPlayerEnteredStart`/`ExitedStart`)は引き続き残しています。これは「境界を跨いだ次の瞬間に即座に反応する」という応答性のためのFast Pathであり、`ReconcilePlayersInStartArea()`はその上に重ねる**安全網**です。Ready判定を行う`ReevaluateReady()`が呼ばれるたびに実際の座標で自己修復されるため、途中でTriggerイベントが1つ欠けても、次の判定タイミングまでには必ず正しい状態に戻ります。
+
+この方式は「毎Frame Scene全体からPlayerを検索する」重い構成ではありません。`ReevaluateReady()`自体がTrigger Enter/Exit・切断・Failure Reset完了時などの**離散的なタイミングでしか呼ばれない**上、ループの対象も現在接続中のPlayer数(通常数人)に限られます。
+
 ---
 
 ## 7. Start Challenge(READY → RUNNING)

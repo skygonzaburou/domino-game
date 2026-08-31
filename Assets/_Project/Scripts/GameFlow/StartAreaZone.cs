@@ -38,6 +38,18 @@ namespace Domino.GameFlow
             return transform.TransformPoint(new Vector3(clampedX, local.y, clampedZ));
         }
 
+        // Ground-truth "is this point actually inside the raw trigger volume right now",
+        // independent of any OnTriggerEnter/Exit event history. Used by GameFlowManager to
+        // reconcile its Player-tracking Set against reality at Ready decision points, rather
+        // than trusting cumulative trigger events forever (see Step 7.7 notes in GameFlow.md).
+        public bool ContainsWorldPoint(Vector3 worldPosition)
+        {
+            Vector3 local = transform.InverseTransformPoint(worldPosition);
+            Vector3 halfSize = _boxCollider.size * 0.5f;
+            Vector3 diff = local - _boxCollider.center;
+            return Mathf.Abs(diff.x) <= halfSize.x && Mathf.Abs(diff.y) <= halfSize.y && Mathf.Abs(diff.z) <= halfSize.z;
+        }
+
         protected override void OnTriggerEnter(Collider other)
         {
             if (other.CompareTag("Player"))

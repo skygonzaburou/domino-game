@@ -458,6 +458,52 @@ Play Mode上で、Phase遷移(`BeginRun()`/`TriggerFailure()`の直接呼び出�
 
 ---
 
+## Step 7.7: Gameplay Control / Placement UX / Ready Re-arm Fix
+
+Step 7.7では、Step 7.6完了後の実プレイフィードバックを受け、3件の改善(Ready Re-armの根本バグ修正、RUNNING中Screen-relative Movement、Placement UXのCamera Aim化)と、Prototype CharacterへのNose追加を行いました。Strict Clear判定・Failure検出・Failure Reset(Step 7.5)、Start Area拘束・Overview Camera自体の仕組み(Step 7.6)には変更を加えていません。
+
+### 実装済み
+
+**Ready Re-arm根本修正**
+- `StartAreaZone.cs`に`ContainsWorldPoint(Vector3)`を追加。`OnTriggerEnter`/`OnTriggerExit`の履歴に一切関係なく、指定した座標が今この瞬間BoxCollider範囲内にあるかどうかだけを判定する
+- `GameFlowManager.cs`に`ReconcilePlayersInStartArea()`を追加し、`ReevaluateReady()`の冒頭で必ず呼ぶようにした。現在接続中の全PlayerについてActual位置と`_playersInStartArea`の追跡状態を突き合わせ、ズレていれば追加/削除して自己修復する。Trigger Eventによる即時反映(Fast Path)は維持しつつ、Ready判定の直前に必ずGround Truthで検証し直す形にした
+
+**RUNNING中Screen-relative Movement**
+- `PlayerMotor.ApplyMovement()`を変更: Step 7.6で導入した「confined中はPlayer自身の向きを移動基準にする」分岐を撤回し、常に現在アクティブな`ThirdPersonCamera.transform`(BUILDING中はThird Person、RUNNING/SUCCESS/FAILED中はOverviewへ自動ブレンド)を基準にするよう統一。Cameraの地面投影Forwardがほぼ0になる(真下/真上を見る)場合は、Forwardと直交するUpベクトルの地面投影をFallbackとして使用
+- Character Rotationの仕様(移動入力がある時だけ移動方向を向く)は無変更
+
+**Placement UXのCamera Aim化**
+- `PlacementController.ComputeGroundAnchor()`を全面的に再設計: Player前方距離基準から、Camera(画面中央)からのRaycast + Player中心からの`maxPlacementRange`(既定2.7m)でのRange Clampへ変更
+- Step 7.1で追加した`_previewForward`/`previewFollowSpeed`(Player向きの急変化を減速させる仕組み)は、Anchorの基準がPlayer向きに依存しなくなったため削除
+- 新しいUnity Layer`"Player"`を追加し、`Player.prefab`に割り当て。`PlacementController.groundMask`から`"Domino"`(Step 7.1)に加えて`"Player"`も除外(Camera Aimの光線が自分自身のCapsuleに当たってしまうのを防ぐため)。Physics Layer Collision Matrixは変更しておらず、Player↔Domino/Ground/Player同士の物理衝突は引き続き有効
+- `PlacementController.OnGUI()`を追加し、BUILDING中のみ画面中央に`+`のReticleを表示(Canvas/UI Toolkit不使用の最小実装)
+
+**Prototype Character Nose**
+- `Player.prefab`の`Visual`配下に`Nose`(Sphere、Collider無し、`NoseMaterial`使用)を追加。ローカル座標`(0, 0.6, 0.5)`、`PlayerMotor`が前進方向として扱う+Z軸と一致
+
+### 動作確認済み
+
+Play Mode上で、Phase遷移の直接操作とgenuine Input System入力(`QueueStateEvent`)を組み合わせて確認しました。
+
+- **Ready Re-arm(3サイクル)**: BUILDING→READY→RUNNING→FAILED→BUILDING→(全員Start Area退出)→Re-arm解除→(全員再入場)→READYという一連の流れを、Host自身の**genuine Teleportによる物理的な入退場**(NetworkTransform.Teleport、実際のOnTriggerEnter/Exitイベント経由)で3回連続実行し、いずれも正しくREADYへ到達することを確認。合わせて、`ReconcilePlayersInStartArea()`が両方向に正しく機能することを個別に確認: (1) 実際にはいないPlayerの追跡エントリ(Proxy呼び出しで人為的に混入させたもの)が次のReady判定で正しく除去されること、(2) 物理的にはStart Area内にいるPlayerの追跡エントリを人為的に削除しても、次のReady判定で正しく復元されること
+- **Screen-relative Movement**: RUNNING中、Overview Cameraのground-projected ForwardがおよそStage奥方向(+Z)を向いている状態で、`_moveAxis=(0,1)`(W)を与えるとPlayerが+Z方向(画面上方向)へ、`_moveAxis=(1,0)`(D)を与えると+X方向(画面右方向)へ正しく移動することを確認。移動のたびにCharacterの向きも移動方向へ回転することを確認。Start Area Constraintは同じ座標(境界Z=-8.50)で引き続き正しく機能することを確認(X/Z独立軸のClampがそれぞれ機能し、境界に沿ったスライドも可能)
+- **Placement UX**: BUILDING中、画面中央に`+`のReticleが表示されることをScreenshotで確認。Playerの向きを変えずにCameraだけを回すと(`playerForward`は不変のまま)Marker位置が正しく変化し、Player中心から`maxPlacementRange`ちょうどの距離でClampされることを数値上確認。Right Click LockとE-only Lock、Lock後にCameraを回してもMarker位置が固定されたままであること、Ghost/Real DominoがLock位置と一致することをそれぞれ確認
+- **Nose**: `Player.prefab`のPrefab Stage上でColliderを持たないことを確認。実行時、Player前方からのScreenshotで赤いNoseが正面(+Z側)に表示されることを視覚的に確認
+- **既存機能回帰**: BUILDING中のDomino Cleanup、Start→CP1→CP2→Goal→SUCCESSの正常ルート(Strict Clear判定含む)が引き続き正常に動作することを確認。Console Errorは検証全体を通じて0件
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作による直接確認**: 従来通りの制約により、Client自身のRUNNING中Screen-relative Movement、Placement UX(Camera Aim)を実機で直接確認することはできていません。いずれもOwner Authority/ローカル処理(`IsOwner`ガード)にのみ依存し、Host/Clientで同一のコードパスを通るため、Host側の確認結果が同様に当てはまるはずですが、開発者ご自身での実機確認を推奨します
+- **`maxPlacementRange`の余白(0.3m)が実際に十分か**: 今回の検証で1回だけ、Rangeちょうどの位置での配置がHost側の距離Validationに弾かれる事象が見つかり、`maxPlacementRange`を`DominoSpawner.maxPlacementDistance`より0.3m小さくすることで解消しました。この余白が全ての実プレイ状況(高速移動中の確定等)で十分かは、開発者ご自身での実機確認を推奨します
+
+### 将来確認が必要な事項
+
+- `ReconcilePlayersInStartArea()`は現在接続中のPlayer数に比例したコストです。将来的にPlayer数が大きく増える場合(4人超)は、実測でのPerformance確認が必要です
+- Reticleは現状固定の`+`のみで、Placement Range外を狙っている場合の視覚的フィードバック(色を変える等)は今回実装していません
+- Nose用の`NoseMaterial`は仮の色・仮の形状です。正式なCharacter Modelへの置き換え時に一緒に見直す想定です
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

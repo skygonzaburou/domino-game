@@ -18,14 +18,16 @@ namespace Domino.Player
         [SerializeField] private GameObject ghostDominoPrefab;
         [SerializeField] private GameObject placementMarkerPrefab;
 
-        [Header("Placement Position")]
-        [SerializeField] private float forwardDistance = 1.2f;
+        [Header("Placement Position (Step 7.7: Camera Aim基準)")]
+        [Tooltip("Player中心からの水平距離で、実際に配置できる範囲(DominoSpawnerの距離Validationと一致させること)")]
+        [SerializeField] private float maxPlacementRange = 3f;
         [SerializeField] private float hoverHeight = 0.15f;
+        [Tooltip("画面中央のCamera Aim Raycastの最大距離(奥のStage Surfaceを検出するため)")]
+        [SerializeField] private float cameraAimRange = 50f;
+        [Tooltip("Range Clamp後のXZ位置で、地面の高さ・傾きを再検出する垂直Raycastの距離")]
         [SerializeField] private float groundRaycastRange = 3f;
         [SerializeField] private LayerMask groundMask = ~0;
         [SerializeField] private float dominoRestingHeight = 0.5f;
-        [Tooltip("Live Preview中、Player Forwardの変化にAnchorが追従する最大速度(度/秒)。PlayerStats.rotationSpeed(720)より意図的に低く抑え、Camera操作をしながら移動キーを押した際にPlayerの体が素早く向きを変えても、Markerがそれにつられて激しく振れ回らないようにする")]
-        [SerializeField] private float previewFollowSpeed = 240f;
 
         private PlayerMotor _motor;
         private GameObject _ghostInstance;
@@ -35,20 +37,10 @@ namespace Domino.Player
         private bool _isPlacing;
         private bool _markerActive;
         private bool _markerLocked;
-
-        // Smoothed stand-in for the player's raw flat-forward direction, used only to
-        // drive the Live Preview anchor. The player's own body can reorient near-instantly
-        // (rotationSpeed=720deg/s in PlayerStats) to chase the camera-relative move
-        // direction while a movement key is held; without this, ComputeGroundAnchor()
-        // would snap the Marker to match every frame, which reads as the Marker orbiting
-        // the player during a fast camera spin. Reset (not eased) whenever Live Preview
-        // is about to resume, so the very first frame after Lock/Cancel/Confirm/BUILDING
-        // re-entry is exact, and only frame-to-frame tracking after that is damped.
-        private Vector3 _previewForward = Vector3.forward;
-        private bool _previewForwardValid;
+        private GUIStyle _reticleStyle;
 
         // Single source of truth for where a Domino would go: computed once by
-        // UpdateMarker()/EnterPlacementMode(), then reused as-is by the Marker, the
+        // ComputeGroundAnchor()/EnterPlacementMode(), then reused as-is by the Marker, the
         // Ghost (with its own hoverHeight offset for the wobble pivot) and the RPC sent
         // on Confirm - none of them ever recompute this independently.
         private Vector3 _anchorGroundPosition;
@@ -78,14 +70,13 @@ namespace Domino.Player
                 if (_isPlacing) CancelPlacement();
                 else if (_markerActive) HideMarker();
                 _markerLocked = false;
-                _previewForwardValid = false;
                 return;
             }
 
             if (!_isPlacing)
             {
                 // Live Preview: as long as the marker isn't locked, it continuously
-                // follows the player's current placement candidate every frame.
+                // follows the current Camera Aim every frame.
                 if (!_markerLocked)
                 {
                     ComputeGroundAnchor();
@@ -96,7 +87,7 @@ namespace Domino.Player
                 if (mouse != null && mouse.rightButton.wasPressedThisFrame)
                 {
                     // Always recompute so a second Right Click re-locks to the
-                    // current live position rather than the old locked one.
+                    // current Camera Aim position rather than the old locked one.
                     ComputeGroundAnchor();
                     _markerLocked = true;
                     ShowMarker(MarkerState.Locked);
@@ -122,36 +113,46 @@ namespace Domino.Player
             }
         }
 
+        // Screen-center ("Camera Aim") raycast against the Stage Surface, range-clamped around
+        // the Player so aiming far away never proposes a spot DominoSpawner's own distance
+        // Validation would reject. groundMask excludes the Domino and Player Layers (Step 7.1/
+        // 7.7) so already-placed Dominoes and Player bodies are never mistaken for ground.
         private void ComputeGroundAnchor()
         {
-            Vector3 targetFlatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
-            if (targetFlatForward.sqrMagnitude < 0.0001f) targetFlatForward = Vector3.forward;
+            Camera cam = ThirdPersonCamera.Instance != null ? ThirdPersonCamera.Instance.GetComponent<Camera>() : null;
+            Vector3 rayOrigin = cam != null ? cam.transform.position : transform.position + Vector3.up * 1.5f;
+            Vector3 rayDirection = (cam != null ? cam.transform.forward : transform.forward).normalized;
 
-            if (!_previewForwardValid)
+            Vector3 aimPoint;
+            if (Physics.Raycast(rayOrigin, rayDirection, out RaycastHit aimHit, cameraAimRange, groundMask, QueryTriggerInteraction.Ignore))
             {
-                _previewForward = targetFlatForward;
-                _previewForwardValid = true;
+                aimPoint = aimHit.point;
             }
             else
             {
-                float maxRadiansDelta = previewFollowSpeed * Mathf.Deg2Rad * Time.deltaTime;
-                _previewForward = Vector3.RotateTowards(_previewForward, targetFlatForward, maxRadiansDelta, 0f).normalized;
+                aimPoint = rayOrigin + rayDirection * cameraAimRange;
             }
 
-            Vector3 flatForward = _previewForward;
-            Vector3 basePos = transform.position + flatForward * forwardDistance;
+            Vector3 flatOffset = new Vector3(aimPoint.x - transform.position.x, 0f, aimPoint.z - transform.position.z);
+            if (flatOffset.magnitude > maxPlacementRange)
+            {
+                flatOffset = flatOffset.normalized * maxPlacementRange;
+            }
+            Vector3 candidateXZ = transform.position + flatOffset;
+
             float groundY = transform.position.y;
             Vector3 groundNormal = Vector3.up;
-
-            Vector3 rayOrigin = basePos + Vector3.up * groundRaycastRange * 0.5f;
-            if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, groundRaycastRange, groundMask, QueryTriggerInteraction.Ignore))
+            Vector3 verticalOrigin = new Vector3(candidateXZ.x, transform.position.y + groundRaycastRange, candidateXZ.z);
+            if (Physics.Raycast(verticalOrigin, Vector3.down, out RaycastHit vHit, groundRaycastRange * 2f, groundMask, QueryTriggerInteraction.Ignore))
             {
-                groundY = hit.point.y;
-                groundNormal = hit.normal;
+                groundY = vHit.point.y;
+                groundNormal = vHit.normal;
             }
 
-            _anchorGroundPosition = new Vector3(basePos.x, groundY, basePos.z);
-            _anchorFlatRotation = Quaternion.LookRotation(flatForward, Vector3.up);
+            Vector3 facing = flatOffset.sqrMagnitude > 0.0001f ? flatOffset.normalized : transform.forward;
+
+            _anchorGroundPosition = new Vector3(candidateXZ.x, groundY, candidateXZ.z);
+            _anchorFlatRotation = Quaternion.LookRotation(facing, Vector3.up);
             _anchorGroundNormal = groundNormal;
         }
 
@@ -179,12 +180,35 @@ namespace Domino.Player
             _markerActive = false;
         }
 
+        // Simple screen-center Reticle so the Player can see where Camera Aim is pointing
+        // before locking a Marker there. Deliberately not a Canvas/UI Toolkit element - a
+        // single OnGUI() label is enough for this Prototype and needs no scene setup.
+        private void OnGUI()
+        {
+            if (!IsOwner) return;
+            if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING) return;
+
+            if (_reticleStyle == null)
+            {
+                _reticleStyle = new GUIStyle
+                {
+                    fontSize = 20,
+                    alignment = TextAnchor.MiddleCenter,
+                    normal = { textColor = Color.white }
+                };
+            }
+
+            float cx = Screen.width * 0.5f;
+            float cy = Screen.height * 0.5f;
+            GUI.Label(new Rect(cx - 10f, cy - 12f, 20f, 24f), "+", _reticleStyle);
+        }
+
         private void EnterPlacementMode()
         {
             if (!_markerLocked)
             {
-                // Bare E with no prior Right Click: lock to whatever the Live
-                // Preview was showing this frame (already computed above).
+                // Bare E with no prior Right Click: lock to whatever the Camera Aim
+                // was showing this frame (already computed above).
                 _markerLocked = true;
                 ShowMarker(MarkerState.Locked);
             }
@@ -249,9 +273,8 @@ namespace Domino.Player
             }
             HideMarker();
             // Unlock so, if still BUILDING, next frame's Update() immediately
-            // resumes the Live Preview following the player again.
+            // resumes following Camera Aim again.
             _markerLocked = false;
-            _previewForwardValid = false;
             _motor.SetMovementEnabled(true);
 
             if (ThirdPersonCamera.Instance != null)

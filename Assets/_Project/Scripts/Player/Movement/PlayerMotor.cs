@@ -97,13 +97,31 @@ namespace Domino.Player
         {
             bool confined = IsConfinedToStartArea();
 
-            // Overview Camera (Step 7.6) can face an arbitrary Stage-authored direction while
-            // confined, so Camera-relative WASD would feel random. Fall back to the Player's
-            // own facing as the movement basis in that case; BUILDING's normal Camera-relative
-            // feel is otherwise unchanged.
-            Transform basis = confined || ThirdPersonCamera.Instance == null ? transform : ThirdPersonCamera.Instance.transform;
-            Vector3 forward = Vector3.ProjectOnPlane(basis.forward, Vector3.up).normalized;
-            Vector3 right = Vector3.ProjectOnPlane(basis.right, Vector3.up).normalized;
+            // Screen-relative movement basis: always derived from the currently-active Camera
+            // transform (Third Person during BUILDING/READY, Overview once RUNNING's blend
+            // completes - Step 7.7), ground-projected so W/A/S/D map to up/left/down/right on
+            // screen regardless of which camera is active. BUILDING's feel is unchanged since
+            // its camera never pitches steeply; Overview (Stage-authored, can be steep) gets a
+            // fallback via the camera's Up axis, which is guaranteed horizontal exactly when
+            // Forward's ground projection collapses (near-straight-down/up look).
+            Vector3 forward;
+            Vector3 right;
+            if (ThirdPersonCamera.Instance != null)
+            {
+                Transform cam = ThirdPersonCamera.Instance.transform;
+                forward = Vector3.ProjectOnPlane(cam.forward, Vector3.up);
+                if (forward.sqrMagnitude < 0.0001f)
+                {
+                    forward = Vector3.ProjectOnPlane(cam.up, Vector3.up);
+                }
+                forward = forward.sqrMagnitude > 0.0001f ? forward.normalized : Vector3.forward;
+                right = Vector3.Cross(Vector3.up, forward);
+            }
+            else
+            {
+                forward = transform.forward;
+                right = transform.right;
+            }
 
             Vector3 direction = forward * _moveAxis.y + right * _moveAxis.x;
             float speed = _stats.moveSpeed * (_dashHeld ? _stats.dashMultiplier : 1f);
