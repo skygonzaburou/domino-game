@@ -1,0 +1,203 @@
+# Architecture(全体構成)
+
+このドキュメントは、2026年時点でプロジェクトに**実際に実装されている内容**を、Project / Scene / Prefab / Script / Package の実体を確認した上でまとめたものです。`GameDesign.md` に書かれている将来仕様(チェックポイント等)の多くはまだ実装されていません。ここに書かれているのは「Step 0〜Step 4」で作られた、オンライン対応の土台部分と、ネットワーク非対応のDomino物理プロトタイプ、および同じくネットワーク非対応のGhost Domino配置システムです。
+
+---
+
+## 1. Project全体構成
+
+```
+Assets/
+├─ _Project/                      … このプロジェクト専用のコード・アセット置き場
+│  ├─ Scripts/
+│  │  ├─ Core/                    … (空フォルダ。将来のゲーム全体管理スクリプト用に予約)
+│  │  ├─ Player/
+│  │  │  ├─ PlayerStats.cs
+│  │  │  ├─ Movement/
+│  │  │  │  └─ PlayerMotor.cs
+│  │  │  ├─ Placement/             … Step 4で追加
+│  │  │  │  └─ PlacementController.cs
+│  │  │  ├─ Visual/               … (空フォルダ。将来のAnimator接続・見た目切り替え用に予約)
+│  │  │  └─ Network/              … (空フォルダ。現状ネットワーク処理はPlayerMotorに同居)
+│  │  ├─ Domino/                  … Step 4で追加
+│  │  │  └─ GhostDomino.cs
+│  │  ├─ Networking/
+│  │  │  └─ NetworkBootstrap.cs
+│  │  └─ CameraSystem/
+│  │     └─ ThirdPersonCamera.cs  … Step 4でPlacement View機能を追加
+│  ├─ Prefabs/
+│  │  ├─ Player.prefab            … Step 4で PlacementController を追加
+│  │  ├─ Domino.prefab            … Step 3で追加。ネットワーク非対応のローカル物理オブジェクト
+│  │  └─ GhostDomino.prefab       … Step 4で追加。ネットワーク非対応・Physics非干渉の配置プレビュー用
+│  ├─ Materials/                  … Step 4で追加
+│  │  └─ GhostDominoMaterial.mat  … URP/Lit、半透明(Transparent Surface)
+│  └─ Physics/                    … Step 3で追加
+│     ├─ DominoPhysicsMaterial.physicMaterial
+│     └─ GroundPhysicsMaterial.physicMaterial
+├─ Scenes/
+│  └─ SampleScene.unity           … Build Settingsに登録されている唯一のScene
+├─ Settings/                      … URPテンプレート標準(Renderer / VolumeProfile等)
+├─ TutorialInfo/                  … Unityテンプレート標準のReadme(未使用)
+├─ InputSystem_Actions.inputactions … テンプレート標準のInput Actionアセット(現状未使用。入力は後述の通りKeyboard/Mouseを直接ポーリング)
+└─ DefaultNetworkPrefabs.asset    … Netcode for GameObjectsが管理する「ネットワーク経由でSpawnできるPrefab一覧」。Player.prefabが自動登録済み
+```
+
+`_Project` 配下だけがこのゲーム固有の実装で、それ以外(`Settings`, `TutorialInfo` など)はUnityの「Universal 3D」テンプレートが最初から用意していたものです。
+
+`Visual` フォルダと `Network` フォルダは当初の設計案どおりに作成しましたが、現時点では中身を持つほど分離すべき処理がなかったため空のままです(詳細はPlayerSystem.mdの「Local/Remoteでの違い」を参照)。
+
+---
+
+## 2. Package構成
+
+`Packages/manifest.json` に実際に記載されている依存関係のうち、このゲームに関係するものだけを抜粋します。
+
+| Package | Version | 用途 |
+|---|---|---|
+| `com.unity.netcode.gameobjects` | 2.13.2 | オンラインマルチプレイの本体(NetworkManager, NetworkObject, NetworkTransform等) |
+| `com.unity.transport` | 6.5.0(NGOの依存として自動導入) | 実際にUDP通信を行う低レベル通信層(UnityTransport) |
+| `com.unity.multiplayer.playmode` | 2.0.2 | Unity Editor内で2つ以上のPlayerを同時起動してテストする機能(MPPM) |
+| `com.unity.inputsystem` | 1.20.0 | キーボード/マウス入力の取得(`Keyboard.current`, `Mouse.current`) |
+| `com.unity.render-pipelines.universal` | 17.5.0 | 描画パイプライン(URP)。テンプレート標準だが実際に使用中 |
+
+以下はUniversal 3Dテンプレートに最初から含まれていたもので、**現状このゲームのコードからは使用していません**(将来UIやアニメーション制作で使う可能性はあります):
+`com.unity.ai.navigation`, `com.unity.multiplayer.center`, `com.unity.collab-proxy`, `com.unity.ide.rider` / `ide.visualstudio`, `com.unity.test-framework`, `com.unity.timeline`, `com.unity.ugui`, `com.unity.visualscripting`, および各種 `com.unity.modules.*`。
+
+また `com.coplaydev.unity-mcp`(MCP for Unity)は、Claude Codeなど AIツールからEditorを操作するための**開発補助ツール**であり、ゲーム本体の一部ではありません。
+
+---
+
+## 3. Scene構成
+
+Scene は `Assets/Scenes/SampleScene.unity` の1つだけで、Build Settingsにもこれ1つだけが登録されています。
+
+Scene内のRoot GameObjectは次の6つです。
+
+| GameObject | 主なComponent | 役割 |
+|---|---|---|
+| **Main Camera** | Camera, AudioListener, `ThirdPersonCamera` | 三人称カメラ本体。Scene起動時から常に存在する |
+| **Ground** | MeshFilter/MeshRenderer(Plane), MeshCollider | 30m×30mの床(Planeプリミティブをscale(3,1,3)で拡大)。MeshColliderには`GroundPhysicsMaterial`を設定 |
+| **Directional Light** | Light | Universal 3Dテンプレート標準のライト |
+| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap` | オンライン通信の起点となるオブジェクト |
+| **Global Volume** | Volume | URPのポストプロセス設定(テンプレート標準) |
+| **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
+
+**重要**: このScene自体には **Playerは1体も配置されていません**。Playerは `NetworkManager` が実行時に `Player.prefab` を都度生成(Spawn)する形で登場します。これはNetcode for GameObjectsの標準的な作り方で、「Editor上で目に見える固定のキャラクター」ではなく「接続してきたクライアントの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**であり、`NetworkObject`を持たないためHost/Client間で同期されません(Step 3の意図的な制限。詳細はImplementationStatus.mdを参照)。
+
+Step 4で追加した Ghost Domino・確定後のReal Dominoも、Playerと同様に**Scene上には直接配置されておらず**、`PlacementController`が実行時に`Instantiate()`する形で登場します。Ghostは`PlacementController`ごとに1体だけ生成され、非表示⇄表示を繰り返して使い回されます(Placement Modeを抜けるたびに`Destroy`されるわけではありません)。
+
+---
+
+## 4. GameObject構成の詳細
+
+### Main Camera
+`ThirdPersonCamera` コンポーネントが付いており、初期値は `distance=4, pitchMin=-30, pitchMax=60, sensitivity=2, lockCursor=true` です。起動直後はまだ誰も追従対象になっていませんが、Playerがスポーンすると自動的にそのPlayerを追うようになります(詳細はPlayerSystem.md)。
+
+### NetworkManager
+3つのコンポーネントが同じGameObjectに載っています。
+- `NetworkManager`: Netcode for GameObjects本体の管理者
+- `UnityTransport`: 実際の通信を行う部品(接続先 `127.0.0.1:7778`)
+- `NetworkBootstrap`: 誰がHostで誰がClientかを判断して自動的に起動処理を行う自作スクリプト
+
+この3つの関係は Networking.md で詳しく説明しています。
+
+---
+
+## 5. Script一覧と役割
+
+| ファイル | クラス | 継承元 | 役割(一言で) |
+|---|---|---|---|
+| [PlayerStats.cs](../Assets/_Project/Scripts/Player/PlayerStats.cs) | `Domino.Player.PlayerStats` | `MonoBehaviour` | 移動速度などの数値を保持するだけの「データの入れ物」。ロジックは一切持たない |
+| [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用) |
+| [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成・Real Dominoの確定を行う |
+| [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント |
+| [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加 |
+| [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
+
+各スクリプトのField/Methodの詳細は `PlayerSystem.md`(PlayerMotor / PlayerStats / ThirdPersonCamera / PlacementController / GhostDomino)と `Networking.md`(NetworkBootstrap)にまとめています。
+
+---
+
+## 6. Prefab構成
+
+`Player.prefab`(`Assets/_Project/Prefabs/Player.prefab`)の階層構造:
+
+```
+Player (Root)
+├─ Rigidbody
+├─ CapsuleCollider
+├─ PlayerStats
+├─ PlayerMotor
+├─ NetworkObject
+├─ NetworkTransform
+├─ NetworkRigidbody
+├─ PlacementController     … Step 4で追加
+├─ Visual                 (子GameObject, ローカル座標 0, 1, 0)
+│   ├─ MeshFilter (Capsule)
+│   └─ MeshRenderer
+└─ CameraTarget            (子GameObject, ローカル座標 0, 1.6, 0)
+```
+
+物理判定(Rigidbody / CapsuleCollider)とネットワーク関連コンポーネントはすべて **Root** に集約し、見た目(Capsuleメッシュ)は **Visual** という別の子オブジェクトに分離してあります。これは「将来Capsuleを3Dモデルに差し替えるときに、Rootの物理・ネットワーク設定を一切変更せずに済む」ようにするための意図的な設計です。`CameraTarget` は三人称カメラが注視する頭の高さの目印用の空オブジェクトです。
+
+詳しい各コンポーネントの役割は `PlayerSystem.md` を参照してください。
+
+`Domino.prefab`(`Assets/_Project/Prefabs/Domino.prefab`)の階層構造:
+
+```
+Domino (Root, 単一GameObject)
+├─ Transform      (localScale 0.3 x 1.0 x 0.15)
+├─ MeshFilter     (Cube)
+├─ MeshRenderer
+├─ BoxCollider    (Material: DominoPhysicsMaterial)
+└─ Rigidbody
+```
+
+Playerとは異なり、`Domino.prefab` は見た目(Visual)と物理(Physics)を分離せず単一のGameObjectにまとめています。現時点では「将来Meshyでモデルを差し替える」以外に分離すべき理由がなく、`NetworkObject`も持たないため、Player側で行ったような分離のメリットがないと判断したためです(詳細はImplementationStatus.mdのStep 3を参照)。
+
+`GhostDomino.prefab`(`Assets/_Project/Prefabs/GhostDomino.prefab`)の階層構造:
+
+```
+GhostDomino (Root, 単一GameObject)
+├─ Transform      (localScale 0.3 x 1.0 x 0.15、Domino.prefabと同じ見た目サイズ)
+├─ MeshFilter     (Cube)
+├─ MeshRenderer   (Material: GhostDominoMaterial、半透明)
+└─ GhostDomino    (首振りアニメーションのみ。Collider・Rigidbodyは持たない)
+```
+
+`Domino.prefab`と見比べると、`BoxCollider`と`Rigidbody`が意図的に存在しません。これによって「PhysicsやPlayer/他のDominoと一切干渉しない、見た目だけのプレビュー」であることをコードの分岐(`if`文)ではなく**コンポーネント構成そのもの**で保証しています。
+
+---
+
+## 7. Componentどうしの関係
+
+```mermaid
+graph TD
+    NB[NetworkBootstrap] -->|StartHost / StartClient を呼ぶ| NM[NetworkManager]
+    NM -->|接続を検知するとPlayerPrefabをSpawn| PF[Player.prefab]
+
+    subgraph "Player.prefab 内部の依存関係"
+        PM[PlayerMotor] -->|RequireComponent| RB[Rigidbody]
+        PM -->|RequireComponent| PS[PlayerStats]
+        PM -->|移動方向の計算に参照| TPC[ThirdPersonCamera.Instance]
+        PM -->|回転を適用| RB
+        PM -->|OnNetworkSpawn時にSetTargetを呼ぶ| TPC
+        NT[NetworkTransform] -.->|Rigidbodyの位置を監視して同期| RB
+        NRB[NetworkRigidbody] -.->|Owner以外ではRigidbodyをKinematic化| RB
+
+        PC[PlacementController] -->|RequireComponent| PM
+        PC -->|Eキーで移動を一時停止| PM
+        PC -->|Instantiateして生成・使い回し| GD[GhostDomino.prefab]
+        PC -->|EnterPlacementView/ExitPlacementViewを呼ぶ| TPC
+        PC -->|左クリック確定時にInstantiate| DP[Domino.prefab]
+    end
+
+    TPC -->|Main Cameraに付与, シングルトン| MC[Main Camera]
+```
+
+ポイントは以下の3つです。
+
+1. **`PlayerMotor` は `ThirdPersonCamera` に依存しているが、`ThirdPersonCamera` は `PlayerMotor` を一切知らない。** カメラは「誰かが `SetTarget()` を呼んでくれるのを待つだけ」の受け身の存在で、Player側から一方的に登録される関係になっています。`PlacementController`も同様に、カメラに対しては`EnterPlacementView()`/`ExitPlacementView()`を一方的に呼ぶだけの関係です。
+2. **`NetworkTransform` と `NetworkRigidbody` はコードから直接呼び出されることはなく、Netcode for GameObjectsの内部処理が自動的に働きます。** `PlayerMotor` は普通にRigidbodyを動かしているだけで、「ネットワークに送信する」という処理を自分で書く必要はありません。
+3. **`NetworkBootstrap` はScene内の唯一の「ネットワークの入口」です。** それ以外のスクリプトはネットワークの起動/接続処理を一切行いません。
+4. **`PlacementController` は `NetworkBehaviour` だが、`GhostDomino`・確定後の`Domino.prefab`インスタンスはどちらも`NetworkObject`を持たない。** `PlacementController`自体はPlayerと同じ`IsOwner`ガードでHost/Client間の操作を分離していますが、そこから生成されるGhost/Real Dominoの同期はStep 5以降の対象であり、Step 4時点では生成したクライアントのローカルにしか存在しません。
