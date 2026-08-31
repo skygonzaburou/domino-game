@@ -416,6 +416,48 @@ Host自身の操作(genuine Input System経由のFキー含む)と`DominoSpawner
 
 ---
 
+## Step 7.6: RUNNING Player Constraint / Overview Camera
+
+Step 7.6では、RUNNING/SUCCESS/FAILED中(`GameFlowManager.IsChallengeActive`)、Playerの移動をStart Area内に制限し、各Clientのローカルカメラを固定視点のOverview Cameraへ自動的に切り替える機能を追加しました。Placement/Marker/Ground Raycast(Step 7.1)、Strict Clear判定・Failure・Reset(Step 7.5)、Domino Physics、Network Authorityには変更を加えていません。
+
+### 実装済み
+
+- `GameFlowManager.cs`に`public bool IsChallengeActive => phase is RUNNING/SUCCESS/FAILED`を追加。Player拘束・移動基準切り替え・Overview Cameraの3箇所すべてがこの1つのプロパティを共通の判定源として参照するようにした
+- `GameFlowManager.cs`に`public StartAreaZone StartArea => startArea`を追加(`PlayerMotor`がStart Areaの境界情報を参照するため)
+- `StartAreaZone.cs`に`ClampToLocalBounds(Vector3 worldPosition)`を追加。`Transform.InverseTransformPoint`/`TransformPoint`を使い、Start AreaのPosition/Rotation/Scaleをすべて反映したLocal空間で、指定した座標を`Player Radius Margin`(既定0.5m)ぶん内側に縮小したBoxCollider範囲内へクランプする
+- `PlayerMotor.cs`の`ApplyMovement()`を変更
+  - `IsChallengeActive`中は移動基準をCamera相対からPlayer自身の向き(`transform`)へ切り替え(BUILDING/READY中の操作感は無変更)
+  - `IsChallengeActive`中は`ConstrainToStartArea()`で水平方向の目標速度を制限。次のFixedUpdateでの到達予定位置を`ClampToLocalBounds()`でクランプし、そこから逆算した速度を採用することで、Teleportを一切使わずに境界での自然な減速・スライドを実現。RUNNING開始時にPlayerが境界のすぐ外側にいた場合も同じ処理が自然に押し戻すため、専用の補正コードは持たない
+- `ThirdPersonCamera.cs`にOverview Camera機能を追加
+  - `Camera.fieldOfView`を制御対象に追加(既存のPlacement Viewブレンドは位置・回転のみでFOVは触れていなかった)
+  - `_overviewBlend`(`Mathf.MoveTowards`、既定`overviewBlendSpeed=2`で約0.5秒遷移)を追加し、`IsChallengeActive`かつ`OverviewCameraPoint.Instance`が存在する間、Position/Rotation/FOVを`OverviewCameraPoint`の値へブレンド
+- `OverviewCameraPoint.cs`(新規, `Domino.CameraSystem`名前空間)を作成。Stage側に配置するTransform + `Field Of View`のみを持つマーカーコンポーネント。`ThirdPersonCamera`はこの値をそのまま参照するだけで、Overview視点の実体はStage側の配置だけで決まる
+- Scene内に`CameraPoints`(空の親)→`OverviewCameraPoint`を新規配置。Start→CP1→CP2→Goalのルート全体を見渡せる位置・角度に設定(`Field Of View = 65`)
+
+### 動作確認済み
+
+Play Mode上で、Phase遷移(`BeginRun()`/`TriggerFailure()`の直接呼び出し、および一部genuine Fキー入力)と`execute_code`によるスクリーンショット・状態読み取りを組み合わせて確認しました。
+
+- **Overview Cameraへの遷移**: BUILDING中はScreenshotで通常のThird Person(Playerに肉薄した視点)であることを確認。RUNNINGへ遷移後、`_overviewBlend`が`0→1`まで正しく進み、Screenshotで実際にStage全体(Start/Checkpoint/Goal)を見渡せる俯瞰視点へ切り替わっていることを視覚的に確認。`Camera.fieldOfView`が`OverviewCameraPoint`の設定値(65)へ正しく反映されることも確認
+- **Player Constraint(境界での停止)**: `_moveAxis`を直接操作してPlayerをStart Areaの境界(Z方向)へ向けて移動させ続けたところ、境界(実測値: Zone中心から4mの半分=2m、`Player Radius Margin`0.5m差し引いた**Z=-8.50で正確に一致**)で完全に停止し、それ以上は一切外側へ進まないことを複数回の追加入力で確認。座標がピタリと同じ値で安定し、Jitter(振動)は発生しませんでした
+- **Player Constraint(範囲内の自由移動)**: 境界から離れる方向への移動は制限なく機能することを確認(Z=-8.50から-10.05まで問題なく戻れた)
+- **Start Dominoを倒せること**: Start Area内でPlayerをDominoへ向けて移動させ、実際に衝突・転倒させ、`StartTriggered`が正しく`True`になることを確認。移動制限の追加がStart Dominoへの到達を妨げないことを確認
+- **FAILED → BUILDING復帰**: Failureをトリガーし、Reset完了(`BUILDING`)後に`_overviewBlend`が`0`、`PlayerMotor`の拘束判定(`IsConfinedToStartArea()`)が`False`に戻ること、Screenshotで実際にThird Person Cameraへ戻っていることを確認
+- **既存機能回帰**: genuine Fキー入力での`READY → RUNNING`、RUNNING遷移時にLive Preview Marker(`_markerActive`)が正しく非表示になること、Console Errorが0件であることを確認
+
+### 未実装/確認できなかった事項
+
+- **Client自身の操作による直接確認**: 従来通りの制約により、Client自身がRUNNING中にStart Area境界へ向かって歩く操作や、Overview Cameraの見え方をClient画面上で直接確認することはできていません。Constraint・Camera切り替えロジックはいずれも各PlayerのOwner Authority/ローカル処理(`IsOwner`・各Clientの`ThirdPersonCamera`)にのみ依存し、「誰が操作しているか」に関係なく同一のコードパスを通るため、Host側の確認結果がClientにも同様に当てはまるはずですが、**開発者ご自身での複数Player実機確認を推奨します**
+- Overview CameraのPosition/Rotation/FOVは、今回のPrototype Stageの1ルートに対して手動調整した1セットのみを検証しています。将来的に大きく異なるレイアウトのStageを作る際は、`StageAuthoring.md`第9章の手順に沿った再調整が必要です
+
+### 将来確認が必要な事項
+
+- Camera Auto Tracking・Dynamic Zoom・Cinematic Camera Path等は今回実装していません(意図的にStep 7.6の対象外としました)
+- RUNNING中にStart Area内で複数Playerが密集した場合の押し合い・Constraint同士の相互作用は、2人プレイの範囲でのみ確認しています(将来4人プレイ対応時に再確認が必要です)
+- `overviewBlendSpeed`(既定2)は今回のPrototype Stageの距離感で違和感のない値を選んだもので、Stageの規模によっては調整が必要になる可能性があります
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

@@ -35,7 +35,8 @@ Assets/
 │  │  ├─ Networking/
 │  │  │  └─ NetworkBootstrap.cs
 │  │  └─ CameraSystem/
-│  │     └─ ThirdPersonCamera.cs  … Step 4でPlacement View機能を追加
+│  │     ├─ ThirdPersonCamera.cs  … Step 4でPlacement View機能を追加。Step 7.6でOverview Camera機能を追加
+│  │     └─ OverviewCameraPoint.cs … Step 7.6で追加。Stage側に配置するOverview視点マーカー
 │  ├─ Prefabs/
 │  │  ├─ Player.prefab            … Step 4で PlacementController、Step 6で ChallengeInput を追加
 │  │  ├─ Domino.prefab            … Step 3で作成。Step 5でNetwork化。Step 6でWidthを0.30→0.35に調整
@@ -103,6 +104,7 @@ Scene内のRoot GameObjectは次の8つです。
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
 | **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
 | **GameFlowZones**(Step 6) | Transform のみ(空の親) | `StartArea` / `Checkpoint_01` / `Checkpoint_02` / `GoalArea` の4つのZoneインスタンスをまとめる親。実際のコース配置はStageごとに変わる想定で、詳細はStageAuthoring.mdを参照 |
+| **CameraPoints**(Step 7.6) | Transform のみ(空の親) | `OverviewCameraPoint` をまとめる親。RUNNING/SUCCESS/FAILED中のOverview Camera視点をStage側で設定するためのマーカー。詳細はStageAuthoring.md第9章を参照 |
 
 **重要**: このScene自体には **Playerは1体も配置されていません**。Playerは `NetworkManager` が実行時に `Player.prefab` を都度生成(Spawn)する形で登場します。これはNetcode for GameObjectsの標準的な作り方で、「Editor上で目に見える固定のキャラクター」ではなく「接続してきたクライアントの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**です。Step 3時点では`Domino.prefab`が`NetworkObject`を持たなかったため同期対象外でしたが、Step 5で`Domino.prefab`に`NetworkObject`が追加されたことで、これら20個も「In-Scene-Placed NetworkObject」という扱いを継承しています。現在`DominoLine`は非アクティブのため実際にSpawn/同期が走ることはありませんが、将来再度アクティブ化して使う場合はこの点に注意してください(詳細はImplementationStatus.mdのStep 5章を参照)。
 
@@ -137,19 +139,20 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | ファイル | クラス | 継承元 | 役割(一言で) |
 |---|---|---|---|
 | [PlayerStats.cs](../Assets/_Project/Scripts/Player/PlayerStats.cs) | `Domino.Player.PlayerStats` | `MonoBehaviour` | 移動速度などの数値を保持するだけの「データの入れ物」。ロジックは一切持たない |
-| [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用) |
+| [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用)。Step 7.6でRUNNING中の移動基準切り替え(Camera相対→Player相対)とStart Area拘束(`ConstrainToStartArea()`)を追加 |
 | [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更 |
 | [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント |
 | [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする。Step 7でSpawn直後の`DominoCleanupManager.Register()`呼び出しを追加 |
 | [DominoCleanupManager.cs](../Assets/_Project/Scripts/Domino/DominoCleanupManager.cs) | `Domino.DominoSystem.DominoCleanupManager` | `MonoBehaviour` | Step 7で追加。Host上でのみ、BUILDING中に倒れたまま`Cleanup Delay`秒経過したDominoを`NetworkObject.Despawn()`する。`DominoSpawner`が登録したDominoのみを一定間隔(`Check Interval`)でまとめて確認する(Domino単位の重い`Update()`は持たない) |
-| [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加 |
+| [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加。Step 7.6で`GameFlowManager.IsChallengeActive`に連動したOverview Cameraへのブレンド(Position/Rotation/FOV)を追加 |
+| [OverviewCameraPoint.cs](../Assets/_Project/Scripts/CameraSystem/OverviewCameraPoint.cs) | `Domino.CameraSystem.OverviewCameraPoint` | `MonoBehaviour` | Step 7.6で追加。Stage側に配置するOverview Camera視点のマーカー。Position/RotationはこのGameObjectのTransformそのもの、Field of ViewはInspector値。`NetworkObject`を持たない完全ローカルのStage設定用コンポーネント |
 | [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
 | [PlacementMarker.cs](../Assets/_Project/Scripts/Player/Placement/PlacementMarker.cs) | `Domino.Player.PlacementMarker` | `MonoBehaviour` | Step 6で追加。床に表示するPlacement Markerの見た目(サイズ・不透明度)のみを扱う、完全ローカルの表示専用コンポーネント |
 | [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | Step 6で追加。`F`キー押下を`GameFlowManager`へのRPC呼び出しに変換する単機能スクリプト |
 | [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | Step 6で追加。BUILDING/READY/RUNNING/SUCCESSの4状態を定義 |
 | [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Step 6で追加。GamePhase/Checkpoint進捗をHost Authorityで管理し、NetworkVariableで同期する司令塔 |
 | [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | Step 6で追加。Zone内でDominoが倒れたかどうかを判定する共通基底クラス |
-| [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Step 6で追加。Start Domino判定に加え、Player Ready判定(全員がStart Areaに入ったか)を行う |
+| [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Step 6で追加。Start Domino判定に加え、Player Ready判定(全員がStart Areaに入ったか)を行う。Step 7.6で`ClampToLocalBounds()`を追加(`PlayerMotor`のStart Area拘束が利用するLocal空間クランプ) |
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Step 6で追加。Checkpoint判定と、明示的な通過順序(`CheckpointIndex`)を持つ |
 | [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Step 6で追加。Goal判定を行う |
 

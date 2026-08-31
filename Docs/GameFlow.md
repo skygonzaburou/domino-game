@@ -27,6 +27,8 @@ public enum GamePhase
 | **SUCCESS** | Start→Checkpoint→Goalを正しい順序で通過し終えた状態 | 不可 | (クリア済み。Dominoは削除されず残る) |
 | **FAILED** | 順序違反、またはChainが途中で完全に静止して失敗した状態 | 不可 | (失敗確定。表示後、全Domino削除→BUILDINGへ) |
 
+Step 7.6で、Player Camera(Overview⇔Third Person)とPlayer移動範囲(Start Area拘束)もこのPhaseに連動するようになりました。`GameFlowManager.IsChallengeActive`(`RUNNING || SUCCESS || FAILED`のいずれか)という1つのプロパティが、両方の切り替え判定の共通の拠り所です。詳細は`PlayerSystem.md`の「RUNNING中のPlayer移動制限とOverview Camera」章を参照してください。
+
 ---
 
 ## 2. 全体の流れ

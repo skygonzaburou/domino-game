@@ -57,6 +57,14 @@ namespace Domino.GameFlow
         public GamePhase CurrentPhase => _phase.Value;
         public int CheckpointProgress => _checkpointProgress.Value;
         public bool StartTriggered => _startTriggered.Value;
+        public StartAreaZone StartArea => startArea;
+
+        // Single source of truth for "the Challenge is in progress or just concluded" - the
+        // Player-movement Start Area confinement (PlayerMotor), the RUNNING-basis movement
+        // controls, and the Overview Camera (ThirdPersonCamera) all key off this same set of
+        // Phases (Step 7.6) instead of each re-listing RUNNING/SUCCESS/FAILED separately.
+        public bool IsChallengeActive =>
+            _phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED;
 
         private void Awake()
         {

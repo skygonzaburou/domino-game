@@ -2,6 +2,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Domino.CameraSystem;
+using Domino.GameFlow;
 
 namespace Domino.Player
 {
@@ -94,15 +95,27 @@ namespace Domino.Player
 
         private void ApplyMovement()
         {
-            Transform view = ThirdPersonCamera.Instance != null ? ThirdPersonCamera.Instance.transform : transform;
-            Vector3 forward = Vector3.ProjectOnPlane(view.forward, Vector3.up).normalized;
-            Vector3 right = Vector3.ProjectOnPlane(view.right, Vector3.up).normalized;
+            bool confined = IsConfinedToStartArea();
+
+            // Overview Camera (Step 7.6) can face an arbitrary Stage-authored direction while
+            // confined, so Camera-relative WASD would feel random. Fall back to the Player's
+            // own facing as the movement basis in that case; BUILDING's normal Camera-relative
+            // feel is otherwise unchanged.
+            Transform basis = confined || ThirdPersonCamera.Instance == null ? transform : ThirdPersonCamera.Instance.transform;
+            Vector3 forward = Vector3.ProjectOnPlane(basis.forward, Vector3.up).normalized;
+            Vector3 right = Vector3.ProjectOnPlane(basis.right, Vector3.up).normalized;
 
             Vector3 direction = forward * _moveAxis.y + right * _moveAxis.x;
             float speed = _stats.moveSpeed * (_dashHeld ? _stats.dashMultiplier : 1f);
 
             Vector3 targetVelocity = direction * speed;
             targetVelocity.y = _rigidbody.linearVelocity.y;
+
+            if (confined)
+            {
+                targetVelocity = ConstrainToStartArea(targetVelocity);
+            }
+
             _rigidbody.linearVelocity = targetVelocity;
 
             if (direction.sqrMagnitude > 0.0001f)
@@ -110,6 +123,32 @@ namespace Domino.Player
                 Quaternion targetRotation = Quaternion.LookRotation(direction, Vector3.up);
                 _rigidbody.MoveRotation(Quaternion.RotateTowards(_rigidbody.rotation, targetRotation, _stats.rotationSpeed * Time.fixedDeltaTime));
             }
+        }
+
+        private static bool IsConfinedToStartArea()
+        {
+            return GameFlowManager.Instance != null && GameFlowManager.Instance.IsChallengeActive;
+        }
+
+        // Clamps the horizontal component of targetVelocity so the Player's next FixedUpdate
+        // position never leaves the Start Area's local-space bounds. This only ever shrinks
+        // the outward-pointing part of the velocity (never adds force), so it composes safely
+        // with Rigidbody physics and needs no per-frame Teleport - a Player already resting
+        // exactly on the boundary (e.g. right after RUNNING begins) is nudged fully inside by
+        // the same clamp instead of a separate one-off correction.
+        private Vector3 ConstrainToStartArea(Vector3 targetVelocity)
+        {
+            StartAreaZone startArea = GameFlowManager.Instance.StartArea;
+            if (startArea == null) return targetVelocity;
+
+            Vector3 currentPos = _rigidbody.position;
+            Vector3 candidatePos = currentPos + new Vector3(targetVelocity.x, 0f, targetVelocity.z) * Time.fixedDeltaTime;
+            Vector3 clampedPos = startArea.ClampToLocalBounds(candidatePos);
+
+            Vector3 allowedVelocity = (clampedPos - currentPos) / Time.fixedDeltaTime;
+            targetVelocity.x = allowedVelocity.x;
+            targetVelocity.z = allowedVelocity.z;
+            return targetVelocity;
         }
 
         private void ApplyJump()

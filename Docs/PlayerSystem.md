@@ -288,7 +288,47 @@ sequenceDiagram
 
 ポイントは「入力を読む場所(`Update`)」と「実際に動かす場所(`FixedUpdate`)」が分かれていることです。これはUnityの一般的な作法で、物理演算(Rigidbodyの操作)は必ず `FixedUpdate` の中で行うことで、フレームレートが変動しても移動速度が一定に保たれます。
 
-また、移動方向が「キー入力そのまま」ではなく「カメラの向きを基準にした方向」になっている点も重要です。`ThirdPersonCamera.transform.forward` を基準にすることで、「Wキー=カメラが向いている方向へ前進」という、三人称視点として自然な操作感になっています。
+また、移動方向が「キー入力そのまま」ではなく「カメラの向きを基準にした方向」になっている点も重要です。`ThirdPersonCamera.transform.forward` を基準にすることで、「Wキー=カメラが向いている方向へ前進」という、三人称視点として自然な操作感になっています。**この基準はBUILDING/READY中のみで、RUNNING/SUCCESS/FAILED中はPlayer自身の向きが基準になります(次章参照)。**
+
+---
+
+## 4.5. RUNNING中のPlayer移動制限とOverview Camera(Step 7.6で追加)
+
+RUNNING/SUCCESS/FAILED中(`GameFlowManager.IsChallengeActive == true`)、Playerの移動とカメラの挙動がBUILDING/READY時と変わります。
+
+### 移動基準がCamera相対からPlayer相対へ切り替わる理由
+
+この間、各Playerの画面は自動的にOverview Camera(Stage全体を見渡す固定視点、後述)へ切り替わります。Overview Cameraの向きはStage側で自由に設定される固定値のため、これを移動基準にしてしまうと「Wキーを押したのにどっちへ進むか予測できない」という状態になってしまいます。そこで`PlayerMotor.ApplyMovement()`は、`IsChallengeActive`の間だけ移動基準をCamera(`ThirdPersonCamera.transform`)からPlayer自身(`transform`)へ切り替えます。
+
+```csharp
+Transform basis = confined || ThirdPersonCamera.Instance == null ? transform : ThirdPersonCamera.Instance.transform;
+```
+
+BUILDING/READY中の操作感(Camera相対)は一切変更していません。
+
+### Start Area拘束(Constraint)
+
+同じ`IsChallengeActive`の間、Playerは`StartAreaZone`のBoxCollider範囲(Position/Rotation/Scaleを反映したLocal空間、`Player Radius Margin`分だけ内側に縮小)から出られなくなります。
+
+```csharp
+// PlayerMotor.ApplyMovement()
+if (confined)
+{
+    targetVelocity = ConstrainToStartArea(targetVelocity);
+}
+```
+
+`ConstrainToStartArea()`は、今のFixedUpdateで進もうとしている**次の位置**を`StartAreaZone.ClampToLocalBounds()`でLocal空間内にクランプし、そこから「実際に許される速度」を逆算します。境界方向へ向かう成分だけが自然に削られ(Teleportは一切使わない)、境界に沿ったスライドも問題なく行えます。RUNNING開始時にPlayerが境界のすぐ外側にいた場合も、同じクランプ処理がその場で軽く押し戻すため、専用の補正コードは別途持っていません。
+
+`StartAreaZone.ClampToLocalBounds()`は`Transform.InverseTransformPoint`/`TransformPoint`を使ってLocal空間で判定するため、Start Areaを回転・非一様Scaleしても正しく機能します(Stage Authoringで自由にStart Areaを配置できる設計を維持しています)。
+
+**この制限があってもStart Dominoは倒せます**: Start DominoはStart Areaの範囲内に配置されるため、拘束範囲内での通常の移動で問題なく到達・衝突できます。
+
+### Overview Camera
+
+`ThirdPersonCamera`は、`IsChallengeActive`かつSceneに`OverviewCameraPoint`(Stage側で配置するTransform、詳細は`StageAuthoring.md`第9章)が存在する間、Position/Rotation/Field of Viewを`OverviewCameraPoint`の値へ`overviewBlendSpeed`(既定2、約0.5秒で遷移)を上限に滑らかにブレンドします。Placement Viewのブレンド(Step 4)と全く同じ`Mathf.MoveTowards`パターンで実装しており、Placement ViewとOverview Viewが同時に有効になることは(Placement自体がBUILDING専用のため)ゲームロジック上起こりません。
+
+Camera自体はNetwork同期しません。`GamePhase`は既にNetworkVariableとして全Clientへ配信されているため、各ClientがLocalで`GameFlowManager.Instance.IsChallengeActive`を見て、自分自身のCameraだけを独立に切り替えます。
 
 ---
 

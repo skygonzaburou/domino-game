@@ -104,7 +104,36 @@ Player(`Player.prefab`)は、Scene上に直接配置されているわけでは�
 
 ---
 
-## 9. よくある設定ミス
+## 9. Overview Camera Pointの置き方(Step 7.6で追加)
+
+RUNNING/SUCCESS/FAILED中、各Playerの画面は自動的に「Overview Camera」(Stage全体を見渡す固定視点)へ切り替わります。この視点は`OverviewCameraPoint`というGameObjectのTransformとFOV設定だけで決まり、**スクリプトを一切書き換える必要がありません**。
+
+1. Sceneに空のGameObjectを作成し、名前を`CameraPoints`とします(既存の`GameFlowZones`と同じ階層に置くと分かりやすいです)。
+2. `CameraPoints`の子として空のGameObjectを作成し、名前を`OverviewCameraPoint`とします。
+3. `OverviewCameraPoint`に`Domino.CameraSystem.OverviewCameraPoint`コンポーネントを追加します。
+4. `OverviewCameraPoint`のTransform(`Position`/`Rotation`)を、Start→Checkpoint→Goalのルート全体が画面に収まるような位置・向きに調整します。Sceneビューで実際に見え方を確認しながら調整するのが確実です。
+5. コンポーネントの`Field Of View`(既定60°)で画角を調整します。ルートが長い場合は数値を大きく、コンパクトな場合は小さくしてください。
+
+```
+Stage
+├─ GameFlowZones
+│   ├─ StartArea
+│   ├─ Checkpoint_01
+│   ├─ Checkpoint_02
+│   └─ GoalArea
+└─ CameraPoints
+    └─ OverviewCameraPoint  (Domino.CameraSystem.OverviewCameraPoint, Field Of View)
+```
+
+`OverviewCameraPoint`はScene内に1つだけ配置してください(複数あると`Awake()`の実行順で最後に初期化されたものだけが`Instance`として使われ、Stage側の意図と食い違う可能性があります)。**Sceneに`OverviewCameraPoint`を1つも置かなかった場合、Overview Cameraへの切り替えは単純にスキップされ、Third Person Cameraのまま**になります(Errorにはなりません)。
+
+### RUNNING中のPlayer移動可能範囲(Start Area Constraint)について
+
+RUNNING/SUCCESS/FAILED中、Playerは`StartAreaZone`の範囲内でのみ移動できます。この範囲は`StartAreaZone`が既に持っているBoxColliderのサイズ(Position/Rotation/Scaleも含む)からそのまま自動的に決まるため、Overview Cameraと同様に**追加の設定は不要**です。`StartAreaZone`のInspectorにある`Player Radius Margin`(既定0.5m)は、Player CapsuleがCollider境界からはみ出さないための余白で、Playerモデルのサイズを変更した場合はここを調整してください。
+
+---
+
+## 10. よくある設定ミス
 
 | 症状 | 原因 | 対処 |
 |---|---|---|
@@ -116,9 +145,11 @@ Player(`Player.prefab`)は、Scene上に直接配置されているわけでは�
 | Goalを倒してもSUCCESSにならない | Checkpointを全て正しい順序で通過していない | 各Checkpointの`Checkpoint Index`と実際に倒した順序を確認する |
 | Dominoを置いてもZoneが反応しない | Domino以外のオブジェクト(Ground等)を誤って配置している、またはDomino.prefab以外を使っている | `Domino.prefab`(Tag: `Domino`)を使用しているか確認する |
 | Zoneの中に置いたのに反応しない | Dominoが倒れていない(角度が`Fallen Angle Threshold`未満) | Dominoをしっかり倒す。閾値を下げたい場合はCheckpoint/Start/GoalのInspectorで調整可能 |
+| RUNNING中もThird Person Cameraのまま(Overview Cameraに切り替わらない) | Sceneに`OverviewCameraPoint`が1つも配置されていない | 9章の手順で`CameraPoints/OverviewCameraPoint`を配置する |
+| RUNNING中、Playerが窮屈すぎて動けない/Start Dominoに届かない | Start Areaの`Scale`が小さすぎる、または`Player Radius Margin`が大きすぎる | Start AreaのScaleを広げるか、`StartAreaZone`の`Player Radius Margin`を小さくする |
 
 ---
 
-## 10. Step 3のテスト用Domino(DominoLine)について
+## 11. Step 3のテスト用Domino(DominoLine)について
 
 Scene内には、Step 3で作成した`DominoLine`(20個のDomino)が非アクティブ状態で残っています。これはPhysicsの検証用テストコンテンツであり、Stage Authoringとは無関係です。誤って削除しないよう注意してください。
