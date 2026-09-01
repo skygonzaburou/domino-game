@@ -859,6 +859,60 @@ MPPM Tag(Main EditorへHost Tagが付与されているため、通常のPlay Mo
 
 ---
 
+## Step 9B: Online Create / Join / Room
+
+Step 9Bでは、Online Play(Create Room / Join Room / Join Code / Online Room / Player Count / Host-only Stage Selectへの遷移)を実装しました。Step 9AのSingle Player経路・既存Gameplay Systemには一切変更を加えていません。詳細は`Docs/OnlineSession.md`を参照してください。
+
+### 実装済み
+
+**Online Service Architecture**
+- `com.unity.services.multiplayer`(2.3.1、Multiplayer Services SDK)を新規導入。導入前に`Packages/packages-lock.json`の解決済み依存関係を確認し、`com.unity.services.relay`/`com.unity.services.lobby`という独立したPackageが存在しないこと(現在の統一Session APIが両者を内部に統合していること)を確認した上で、Session APIのみを使用するArchitectureを採用しました(Lobby/Relayを個別に手動配線する古い方式は不採用)
+- API調査はWeb Docs(一部404で不安定)ではなく`unity_reflect`によるUnity Editorへの直接Reflectionを優先し、`IMultiplayerService`/`SessionOptions`/`SessionOptionsExtensions`/`ISession`/`IHostSession`/`IAuthenticationService`/`UnityServices`の実際のAPI Surfaceを確認した上でコードを書きました
+- `UnityServices.InitializeAsync()` + `AuthenticationService.Instance.SignInAnonymouslyAsync()`(匿名ログインのみ、User Account画面なし)を、Online機能に初めて触れた時点で遅延初期化
+
+**OnlineSessionController.cs(新規)**
+- Create Room: `MultiplayerService.Instance.CreateSessionAsync(new SessionOptions { MaxPlayers = 4 }.WithRelayNetwork())`。**`CreateSessionAsync`完了直後に`NetworkManager.StartHost()`相当が自動的に実行され、`NetworkManager.Singleton.IsHost`/`IsListening`が`true`になることを実機確認**(NGOがProjectに存在することをSDK側が検出し、明示的な`StartHost()`呼び出しなしにHost化される)
+- Join Room: `MultiplayerService.Instance.JoinSessionByCodeAsync(code, null)`。`TMP_InputField`(Placeholder/Text/Viewportを含む完全なUGUI構成)からJoin Codeを読み取り
+- Leave: `ISession.LeaveAsync()` → `NetworkManager.Shutdown()` → `OnlineSelectPanel`へ復帰
+- すべての操作を`try/catch`で保護し、UIには短い一般的なMessage(例: `"Could not join the room.\nPlease check the Join Code."`)のみを表示、詳細な例外はConsoleへ`Debug.LogError`で出力(第26章の要件どおり)
+
+**NetworkSessionState.cs(新規)**
+- MainMenu.unityにScene配置した`NetworkObject`(`GameFlowManager`と同じ「Scene-placed NetworkObject」パターン)。`NetworkVariable<SessionPhase>`(Room/StageSelect/StartingGame/InGame)をHost Authorityで管理
+- `HostAdvanceToStageSelect(int connectedPlayerCount)`: Host-onlyかつPlayer数2人以上の場合のみPhaseを進める、Server側再検証込みのMethod。Room画面の`STAGE SELECT`ボタンから呼ばれる
+- `PhaseChanged`イベントを`OnlineSessionController`が購読し、Phaseが`StageSelect`になった瞬間に**接続中の全員**の`MainMenuController.ShowState(MenuState.StageSelect)`を呼ぶことで、Host/Client問わずLocal Menu UIが同時に切り替わる仕組み
+
+**Online Room UI**
+- `OnlineJoinPanel`: Header、`TMP_InputField`(Join Code入力)、JOINボタン、BACKボタン、Error Text
+- `OnlineRoomPanel`: Header、Join Code表示(実際にServiceが発行した値をそのまま表示、桁数のハードコードなし)、Player Count(`"1 / 4"`形式)、Status Text(Host/Client別文言)、STAGE SELECTボタン(Host-only、`interactable`制御)、LEAVEボタン
+- `OnlineCreatePanel`: "Creating room..."のLoading表示のみ(Step 9Aで作成済みのPlaceholderを転用)
+
+**バグ修正: LeaveAsync()のTimeout Guard**
+- 実機検証中、`ISession.LeaveAsync()`が(Local PlayerがSessionの唯一のMemberだった状況で)応答なく停止する事象を1度観測しました。後からConsoleに出力された`"Received error message from Relay: player timed out due to inactivity"`から、検証環境でのRelay接続自体の劣化が示唆されますが、原因を完全には特定できていません。原因の断定有無に関わらず「外部Service呼び出しがUIを無期限にブロックしてはならない」という判断のもと、`Task.WhenAny(_session.LeaveAsync(), Task.Delay(5秒))`によるTimeout Guardを追加しました。Timeoutした場合もLocal側のNetworkManager Shutdown・Panel遷移は必ず実行されます
+
+### 動作確認済み
+
+Step 9Aと同様、Main EditorのMPPM Host Tagによる自動Gameplay突入を避けるため、検証中は`NetworkBootstrap`を一時的にDisableした状態でPlay Modeに入り、実機で確認しました。
+
+- **Create Room(実際のUnity Relay/Session使用)**: CREATE ROOM実行後、実際にUnity Cloud/Relayサービスへ接続し(Console上でQoS(Quality of Service)による各Relay Region候補への実際の通信ログを確認)、本物のJoin Code(例: `6LM9H8`)が発行され、`OnlineRoomPanel`へ正しく遷移することを確認。`NetworkManager.Singleton.IsHost == true` / `IsListening == true`になることも確認
+- **Room UI表示**: Join Code・Players `1 / 4`・"Waiting for players..."がスクリーンショットで正しく表示されることを確認
+- **2人未満でのSTAGE SELECT無効化**: Player 1人の状態で`StageSelectButton.interactable == False`であること、この状態で疑似Click(`ExecuteEvents.Execute`)を送っても実際にはPhaseが変化しないことを確認
+- **Host Authority Phase遷移**: `NetworkSessionState.HostAdvanceToStageSelect(2)`を直接呼び出し(Player数条件を満たした状況を再現)、`NetworkSessionState.Phase`が`StageSelect`に変化し、`PhaseChanged`イベント経由で`MainMenuController.CurrentState`も自動的に`StageSelect`へ切り替わることを確認。スクリーンショットで、Online経路から到達した`StageSelectPanel`がStep 9Aと同じ4×2 Gridで正しく表示されることを確認
+- **Leave**: `LeaveAsync()`実行後、`NetworkManager.IsListening == False`・`OnlineSelectPanel`へ復帰することを確認。前述のTimeout Guard追加後の再検証では数秒以内に正常完了することを確認
+- **Invalid Join Code**: 無効なCode(`"ZZZZZZ"`)でJOINを実行し、UIには`"Could not join the room.\nPlease check the Join Code."`という一般的なMessageのみが表示され、Consoleには実際の`SessionException`(`"lobby code 'ZZZZZZ' contains an invalid character 'Z'..."`)が出力されることを確認。Menuが操作不能にならないことも確認
+- Console: 本Step実装コード由来の(意図的なInvalid Join Codeテスト・Timeout Guard検証を除く)Error/Warningは最終確認時点で0件
+
+### 未実装/確認できなかった事項
+
+- **実際の2人接続(2人目のClientによる本物のJoin)の直接確認**: MPPM Virtual Playerへの自動操作制約(これまでのStepと同じ)に加え、今回はさらに「同一Editorプロセスから2つの独立したSession/Relay接続を同時に張る」こと自体が実質的に困難なため、Host自身の1接続のみで検証しました。Player数2人以上が必要な分岐(`HostAdvanceToStageSelect`のGuard、Room UIの`canStart`判定)については、実際のPlayer数を引数/プロパティとして直接渡す形で分岐ロジック自体は検証済みですが、「本物の2人目のClientが実際にJoinしてPlayerCountが2になる」という結合的な確認は開発者ご自身での実機確認を推奨します
+- Client側(2人目)のUI("Waiting for the host...")表示は、コード上は`_session.IsHost`の分岐で実装済みですが、実際のClient画面での視覚確認はできていません
+
+### 将来確認が必要な事項
+
+- **`ISession.LeaveAsync()`のHang事象**: 今回1度だけ観測し、Timeout Guardで実害を防止済みですが、根本原因(Relay接続の劣化か、SDK側の既知の挙動か)は特定できていません。再発するようであれば、Unity側のIssue Tracker等の確認を推奨します
+- Step 9C(Online Stage Select本実装、START GAME、Late Join禁止、Network Scene Transition)で、実際に2人以上でのEnd-to-Endテストが必要です
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
