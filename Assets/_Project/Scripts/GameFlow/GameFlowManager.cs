@@ -4,6 +4,8 @@ using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using Domino.DominoSystem;
+using Domino.Networking;
+using Domino.Player;
 
 namespace Domino.GameFlow
 {
@@ -55,7 +57,10 @@ namespace Domino.GameFlow
         private float _timeSinceLastFailureCheck;
         private float _timeSinceLastReadyPoll;
         private bool _failureSequenceRunning;
-        private bool _isRetrying;
+
+        // Step 10A: renamed from _isRetrying - now guards both the SUCCESS -> Retry path and
+        // the new Pause -> Restart path, since both run the same shared reset coroutine.
+        private bool _isResettingStage;
 
         public GamePhase CurrentPhase => _phase.Value;
         public int CheckpointProgress => _checkpointProgress.Value;
@@ -230,6 +235,10 @@ namespace Domino.GameFlow
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         public void RequestStartChallengeRpc(RpcParams rpcParams = default)
         {
+            // Step 10A defense-in-depth: Client-side input is already gated on Pause
+            // (ChallengeInput), but an RPC send is not blocked by Time.timeScale, so the Server
+            // must not trust that gate alone.
+            if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused) return;
             if (_phase.Value != GamePhase.READY) return;
             if (!AllConnectedPlayersInStartArea()) return;
 
@@ -350,13 +359,33 @@ namespace Domino.GameFlow
         public void RetryRequestRpc(RpcParams rpcParams = default)
         {
             if (_phase.Value != GamePhase.SUCCESS) return;
-            if (_isRetrying) return;
+            if (_isResettingStage) return;
 
-            _isRetrying = true;
-            StartCoroutine(RetrySequence());
+            _isResettingStage = true;
+            StartCoroutine(FullStageResetSequence());
         }
 
-        private IEnumerator RetrySequence()
+        // Step 10A: Pause Menu's Restart. GameFlowManager (not GameplayPauseManager) decides
+        // whether this specific request is allowed right now - the caller's own gating (Pause
+        // Menu only reachable while Paused) is never trusted blindly, same philosophy as
+        // RetryRequestRpc above. Shares FullStageResetSequence with Retry (Section 23 of the
+        // Step 10 spec) rather than duplicating the reset logic.
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        public void RequestRestartRpc(RpcParams rpcParams = default)
+        {
+            if (GameplayPauseManager.Instance == null || !GameplayPauseManager.Instance.IsPaused) return;
+            if (_isResettingStage) return;
+
+            _isResettingStage = true;
+            StartCoroutine(FullStageResetSequence());
+        }
+
+        // Shared by SUCCESS -> Retry and Pause -> Restart (Step 10A, Section 23): full Domino
+        // Despawn, Progress/BUILD TIME/Phase reset, and (new in Step 10A) repositioning every
+        // connected Player back to a Spawn Point - Retry never did this before Step 10A, but the
+        // Step 10 spec calls for both entry points to share one reset, so this is a deliberate,
+        // additive extension of Retry's existing behaviour, not a change to it.
+        private IEnumerator FullStageResetSequence()
         {
             bool despawnComplete = false;
             if (DominoCleanupManager.Instance != null)
@@ -371,13 +400,45 @@ namespace Domino.GameFlow
 
             ResetRunState();
             if (ChallengeTimer.Instance != null) ChallengeTimer.Instance.ResetForRetry();
-            _isRetrying = false;
+            RepositionAllPlayersToSpawnPoints();
+            _isResettingStage = false;
             SetPhase(GamePhase.BUILDING);
 
+            // Never leave a freshly-reset stage frozen (Restart always begins from Paused; a
+            // no-op for the Retry path, which can never happen while Paused - see Section 3).
+            if (GameplayPauseManager.Instance != null) GameplayPauseManager.Instance.ServerForceUnpause();
+
             // Same reasoning as FailureResetSequence: check immediately rather than waiting
-            // for the next event/poll tick (though after a Retry, Standing Domino count is
+            // for the next event/poll tick (though after a Reset, Standing Domino count is
             // always 0 until Players rebuild, so this will not reach READY yet).
             ReevaluateReady();
+        }
+
+        // Step 10A (Section 21): deterministically re-assigns each connected Client to a Spawn
+        // Point, reusing the exact same index-based assignment GameplayPlayerSpawner uses on
+        // initial Spawn (Networking.md "Player Spawn Lifecycle") - just applied to an
+        // already-Spawned Player instead of a freshly-Spawned one. Owner Authority is preserved:
+        // the Server never writes a Client-owned Player's Transform/Rigidbody directly - it only
+        // decides WHERE and asks that Player's own Owner to apply it locally
+        // (PlayerMotor.ServerTeleportRpc, mirrors the existing ApplyPushRpc pattern).
+        private void RepositionAllPlayersToSpawnPoints()
+        {
+            if (GameplayPlayerSpawner.Instance == null) return;
+
+            Transform[] spawnPoints = GameplayPlayerSpawner.Instance.ResolveSpawnPoints();
+            if (spawnPoints == null || spawnPoints.Length == 0) return;
+
+            int i = 0;
+            foreach (ulong clientId in NetworkManager.ConnectedClientsIds)
+            {
+                Transform point = spawnPoints[i % spawnPoints.Length];
+                i++;
+
+                if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client) || client.PlayerObject == null) continue;
+
+                PlayerMotor motor = client.PlayerObject.GetComponent<PlayerMotor>();
+                if (motor != null) motor.ServerTeleportRpc(point.position, point.rotation);
+            }
         }
 
         private void SetPhase(GamePhase newPhase)

@@ -24,11 +24,21 @@ namespace Domino.Networking
     [DefaultExecutionOrder(-100)]
     public class GameplayPlayerSpawner : MonoBehaviour
     {
+        // Step 10A: exposed so GameFlowManager.RepositionAllPlayersToSpawnPoints() (Restart/
+        // Retry) can reuse the exact same Spawn Point resolution as the initial Spawn below,
+        // instead of duplicating the GameObject.Find lookup.
+        public static GameplayPlayerSpawner Instance { get; private set; }
+
         [Tooltip("Player Spawnを行う対象のGameplay Scene名")]
         [SerializeField] private string gameplaySceneName = "SampleScene";
 
         [Tooltip("Gameplay Scene内でSpawn Pointの子Transformを探す、親GameObjectの名前")]
         [SerializeField] private string spawnPointsContainerName = "PlayerSpawnPoints";
+
+        private void Awake()
+        {
+            Instance = this;
+        }
 
         private void Start()
         {
@@ -40,6 +50,8 @@ namespace Domino.Networking
 
         private void OnDestroy()
         {
+            if (Instance == this) Instance = null;
+
             if (NetworkManager.Singleton != null)
             {
                 NetworkManager.Singleton.OnServerStarted -= HandleServerStarted;
@@ -111,7 +123,7 @@ namespace Domino.Networking
         // Gameplay Scene itself, so a serialized reference from this persistent
         // (DontDestroyOnLoad) component would not survive across the Menu -> Gameplay Scene
         // boundary.
-        private Transform[] ResolveSpawnPoints()
+        public Transform[] ResolveSpawnPoints()
         {
             GameObject container = GameObject.Find(spawnPointsContainerName);
             if (container == null) return null;

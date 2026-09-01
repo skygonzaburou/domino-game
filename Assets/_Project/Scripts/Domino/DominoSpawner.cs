@@ -23,6 +23,14 @@ namespace Domino.DominoSystem
                 return false;
             }
 
+            // Step 10A defense-in-depth: Client-side input is already gated on Pause
+            // (PlacementController), but an RPC send is not blocked by Time.timeScale, so the
+            // Server must not trust that gate alone.
+            if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused)
+            {
+                return false;
+            }
+
             if (!IsFinite(position) || !IsFinite(rotation))
             {
                 Debug.LogWarning($"[DominoSpawner] Rejected placement from client {senderClientId}: non-finite position/rotation.");

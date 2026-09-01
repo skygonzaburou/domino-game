@@ -1083,6 +1083,51 @@ Play Mode上での直接測定により、以下を確認しました。
 
 ---
 
+## Step 10A: Pause State / Pause Menu / Restart
+
+Step 9.2完了後、開発者ご自身がOnline 2 Playerで正常にGameplayできることを確認された上で、次の機能追加として「Pause Menu / Restart / Navigation / Result Actions」(Step 10)のご依頼を受けました。Step 10Aはそのうち、Global Pause・Pause Menu(Resume/Restart)・Confirmation Dialog・Restart Current Stageの4点を実装したものです。Stage Select/Titleへのナビゲーション、SUCCESS ResultへのStage Select/Titleボタン追加はStep 10Bの範囲です。既存のGameplay(Placement/BUILD TIME/READY/RUNNING/Failure Detection/Fallen-only Cleanup/SUCCESS Exploration)・Networking(NGO/Relay/Session/Deferred Player Spawn)・Menu(Title/Mode Select/Online Play/Room/Host-only Stage Select)には、今回のPause機能に必要な最小限の変更以外、一切手を加えていません。
+
+### 実装済み
+
+- `GameplayPauseManager.cs`(新規, `Domino.GameFlow`名前空間, `NetworkBehaviour`)を作成し、`SampleScene`に`GameFlowManager`と並ぶ新規Scene-placed NetworkObjectとして配置。`NetworkVariable<bool> IsPaused`(Server Authoritative)、`RequestPauseRpc()`/`RequestResumeRpc()`(`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]`)を持つ
+- **Pause適用方式として`Time.timeScale = 0/1`を採用**。実装前に代替案(個々のScriptを都度Disable等)も検討しましたが、既存コードのほぼすべて(Physics、`Time.deltaTime`/`Time.time`ベースのTimer)が無変更で自動的にPauseされる利点が大きいと判断し採用しました。詳細な判断根拠は`PauseSystem.md`を参照
+- `ChallengeTimer.cs`を変更: BUILD TIMEはNGOの`ServerTime.Time`(Local `Time.timeScale`の影響を受けない)を基準にしているため、唯一Pauseの影響を明示的に考慮する必要がありました。`GameplayPauseManager.IsPaused`変化時に同期的に呼ばれる`SyncPauseState()`を追加し、既存のPhase変化検出ロジックと共有の`ApplyActiveTransition()`へ統合
+- `GameFlowManager.cs`を変更: 既存の`RetrySequence()`を`FullStageResetSequence()`として一般化し、新規`RequestRestartRpc()`(Server側で`GameplayPauseManager.IsPaused == true`を要求)と、既存の`RetryRequestRpc()`(Server側で`CurrentPhase == SUCCESS`を要求)の両方から共有するよう変更。**Player Spawn Point再配置を新規追加**(`RepositionAllPlayersToSpawnPoints()`、Step 9.2の`GameplayPlayerSpawner.ResolveSpawnPoints()`を再利用)し、Retry/Restartどちらでも全Playerを正しいSpawn Pointへ戻すようにしました
+- `PlayerMotor.cs`に`ServerTeleportRpc()`を追加(`[Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Server)]`、既存の`ApplyPushRpc`と同じOwner Authority維持パターン)。Rigidbody直接書き換え + `NetworkTransform.Teleport()`の両方を行い、瞬間移動が補間で滑るのを防止
+- `PlacementController.cs`/`ChallengeInput.cs`にPause中の入力ブロックを追加。`DominoSpawner.cs`/`GameFlowManager.RequestStartChallengeRpc()`にもServer側の二重防御を追加(RPC送信自体はTime.timeScaleの影響を受けないため)
+- `PlacementController.cs`に読み取り専用`IsPlacing`プロパティを追加。GameplayHUD側のEscapeキー優先順位判定(Placement Cancel vs Pause Open)に使用
+- `GameplayHUD.cs`を拡張: Pause Panel(Resume/Restartボタン)・Confirmation Dialog(汎用、Yes/No)の表示ロジックとEscapeキールーティングを追加。既存のBUILDING/READY/FAILED/SUCCESS Panel表示・Retry(`R`キー)ロジックは無変更
+- `GameplayHUD.prefab`にPausePanel/ConfirmationPanelの新規UI(UGUI + TextMeshPro、既存パターンを踏襲)を追加
+
+### 動作確認済み(Runtime Test)
+
+Host自身のPlayer(Single Player)での操作、および直接のMethod呼び出し(既存のテスト手法を踏襲)とUnity UIの`ExecuteEvents`による疑似Buttonクリックを組み合わせ、Play Modeで確認しました。
+
+- **BUILDING Pause**: First Domino配置→BUILD TIME計測開始→Pause→5秒実時間待機→BUILD TIMEが完全に凍結(ビット単位で不変)→Resume→ジャンプなく正しく計測再開
+- **RUNNING Pause(Physics凍結)**: Domino ChainにRigidbody速度を直接与えた状態でPause→4秒実時間待機→`transform.position`/`linearVelocity`/`angularVelocity`が完全に不変であることを確認→Resume→同じ値から物理演算が正しく再開
+- **Failure Monitorの正しい再開**: Pause/Resumeを跨いでもFailure Monitorの`_settledSince`(`Time.time`基準)がPause時間分だけ不当に進むことはなく、Resume後は正常な実時間経過に基づいてのみ判定が働くことを確認(人工的な速度注入によるテストで、Resume直後の即時Failedではなく、通常の`failureSettleDuration`分の実時間経過後に正しくFailedが発火することを確認)
+- **Restart**: Player移動済み・Domino 2個設置済み・BUILD TIME計測中の状態からPause→Restart Button Click→Confirmation Dialog表示(メッセージ文言含め正しく表示)→Confirm Yes→Domino 0個、BUILD TIME `--:--.--`、Player位置がSpawn Point(速度0)、Phase=BUILDING、Pause解除(`Time.timeScale == 1`)、Placement再度可能であることを確認
+- **Confirmation Cancel**: Restart Confirmation表示中に「No」をClick→Pause Menuへ復帰、Phase/BUILD TIME/Domino数など一切のGame Stateが変化しないことを確認
+- **UIボタン疎通(`Time.timeScale == 0`中も含む)**: Resume/Restart/Confirm Yes/Confirm Noのすべてを`ExecuteEvents`経由の疑似Clickで検証し、Pause中(`Time.timeScale == 0`)でもButton ClickとRPC送受信が正常に機能することを確認。「Pause中にResume Requestが処理されない」という実装前の懸念は発生しませんでした
+- Console: 上記すべてのテストを通じてProject由来のError/Warning 0件
+
+### 発見・修正したバグ(このStep内)
+
+- **BUILD TIMEのResume直後ジャンプ**: 当初、`ChallengeTimer`のPause対応をUpdate()のポーリング(既存のPhase変化検出と同じ仕組み)に乗せる設計にしていましたが、実機検証で「Resume直後、本来あり得ない大きな値へBUILD TIMEがジャンプする」不具合を発見しました。原因は、`_isPaused.Value`変更の反映(Fold/Resume計算)がUpdate()の次のTickまで遅延する一方、`GetBuildSeconds()`は常に最新のPaused状態を都度読むため、その間のわずかな(しかしEditor非フォーカス時には実時間で数秒に及びうる)ズレが生じたことでした。`GameplayPauseManager`の`OnValueChanged`から`ChallengeTimer.SyncPauseState()`を同期的に呼ぶよう変更して解消し、Pause直後・Resume直後ともに値が完全に一致する(ビット単位)ことを再確認しました
+
+### 未実装/確認できなかった事項
+
+- **実際の2台のClientによるOnline Global Pauseの直接確認**: Step 9系から持ち越しの制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、Host自身の1接続でのみ検証しました。アーキテクチャ自体は`GameFlowManager`/`NetworkSessionState`と同じScene-placed NetworkObjectパターンのため、既存のOnline機能と同様に動作すると判断していますが、開発者ご自身での実機確認を推奨します
+- **Escapeキーの実キー押下によるEnd-to-End確認**: 本環境の`execute_code`ベースのテスト手法では、Input Systemへ注入したキー状態イベントが実際にどのUnity Update() Tickで読み取られるかを外部から正確に制御できず(別の押下シミュレーションが物理キーボードの実状態により上書きされる挙動も確認)、確実な検証ができませんでした。代替として、Button ClickはExecuteEvents経由で確認済みで、Escapeキー自体のルーティングロジック(`GameplayHUD.HandlePauseKey()`)はコードレビューと、同じ`Keyboard.current`ポーリングパターンを使う既存の`R`キー(Retry Shortcut)がこれまで問題なく機能してきた実績から、動作することを確信しています
+- 4人プレイ時のSpawn Point割り当て(Step 9.2から持ち越しの制約、今回も未検証)
+
+### 将来確認が必要な事項
+
+- 実際の2人以上でのOnline Global Pause確認(上記参照、最優先)
+- Escapeキーの実機確認(開発者ご自身の手元での操作確認を推奨)
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

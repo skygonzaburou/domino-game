@@ -24,6 +24,9 @@ namespace Domino.Player
         {
             if (!IsOwner) return;
             if (Keyboard.current == null) return;
+            // Step 10A: Pause blocks all Gameplay Input (Section 12) - an RPC send is not
+            // blocked by Time.timeScale, so this must be checked explicitly.
+            if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused) return;
 
             if (Keyboard.current[startChallengeKey].wasPressedThisFrame && GameFlowManager.Instance != null)
             {

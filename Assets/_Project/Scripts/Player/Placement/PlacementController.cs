@@ -41,6 +41,11 @@ namespace Domino.Player
         private bool _markerActive;
         private bool _markerLocked;
 
+        // Step 10A: lets GameplayHUD's Escape-key routing tell "Local Player mid-Placement"
+        // (Escape belongs to CancelPlacement below) apart from "not placing" (Escape may open
+        // the Pause Menu instead) without duplicating any Placement state of its own.
+        public bool IsPlacing => _isPlacing;
+
         // Yaw adjustment applied on top of _placementBaseRotation while in Placement Mode.
         // Reset to 0 every time Placement Mode is (re-)entered, so Yaw always starts aligned
         // with the Character/Nose facing direction at that moment (spec: Initial Yaw = Nose
@@ -73,6 +78,13 @@ namespace Domino.Player
         private void Update()
         {
             if (!IsOwner) return;
+
+            // Step 10A: Pause is Global (Section 4) - a different Player pausing must stop this
+            // Player's own Placement input too, not just the Pauser's. Ghost/Marker (if already
+            // shown) simply stay visually frozen where they are (their own Update()/Wobble is
+            // Time.deltaTime-driven, already frozen for free by Time.timeScale == 0) rather than
+            // being force-cancelled - Resume picks up exactly where Pause left off.
+            if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused) return;
 
             if (GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase != GamePhase.BUILDING)
             {

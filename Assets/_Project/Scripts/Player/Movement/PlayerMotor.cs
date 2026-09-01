@@ -1,4 +1,5 @@
 using Unity.Netcode;
+using Unity.Netcode.Components;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Domino.CameraSystem;
@@ -21,6 +22,7 @@ namespace Domino.Player
         [SerializeField] private float pushVelocityDecay = 8f;
 
         private Rigidbody _rigidbody;
+        private NetworkTransform _networkTransform;
         private PlayerStats _stats;
         private Vector2 _moveAxis;
         private bool _dashHeld;
@@ -53,6 +55,7 @@ namespace Domino.Player
         private void Awake()
         {
             _rigidbody = GetComponent<Rigidbody>();
+            _networkTransform = GetComponent<NetworkTransform>();
             _stats = GetComponent<PlayerStats>();
 
             // Freeze ALL physics-driven rotation (Step 8A). Previously only X/Z were frozen,
@@ -125,6 +128,28 @@ namespace Domino.Player
         {
             horizontalVelocity.y = 0f;
             _pushVelocity = Vector3.ClampMagnitude(_pushVelocity + horizontalVelocity, maxPushSpeed);
+        }
+
+        // Step 10A (Restart/Retry Player Respawn): the Server decides WHERE (Spawn Point
+        // assignment lives in GameFlowManager.RepositionAllPlayersToSpawnPoints), but only this
+        // Player's own Owner may actually move it - Owner Authority is unchanged by Step 10A,
+        // this mirrors ApplyPushRpc's exact pattern. NetworkTransform.Teleport() (in addition to
+        // the direct Rigidbody write) is required so the jump is instant rather than smoothly
+        // interpolated on remote observers - a large instantaneous position change would
+        // otherwise visibly glide there over several frames (Interpolate = true).
+        [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Server)]
+        public void ServerTeleportRpc(Vector3 position, Quaternion rotation)
+        {
+            _pushVelocity = Vector3.zero;
+            _rigidbody.linearVelocity = Vector3.zero;
+            _rigidbody.angularVelocity = Vector3.zero;
+            _rigidbody.position = position;
+            _rigidbody.rotation = rotation;
+
+            if (_networkTransform != null)
+            {
+                _networkTransform.Teleport(position, rotation, transform.lossyScale);
+            }
         }
 
         private void CheckGrounded()

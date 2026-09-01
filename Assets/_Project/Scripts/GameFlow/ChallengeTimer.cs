@@ -38,6 +38,11 @@ namespace Domino.GameFlow
 
         private GamePhase _lastObservedPhase;
 
+        // Step 10A: tracks IsActivePhase(phase) && !Paused, separately from _lastObservedPhase
+        // below - Pause can flip this without any GamePhase change at all (GameplayPauseManager
+        // never touches GameFlowManager's Phase), so it needs its own edge detection.
+        private bool _lastActiveState;
+
         public bool HasStarted => _timerStarted.Value;
         public bool HasFinalTime => _finalBuildSeconds.Value >= 0.0;
         public double FinalBuildSeconds => _finalBuildSeconds.Value;
@@ -49,6 +54,8 @@ namespace Domino.GameFlow
 
         private static bool IsActivePhase(GamePhase phase) => phase == GamePhase.BUILDING || phase == GamePhase.READY;
 
+        private static bool IsPaused() => GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused;
+
         // Local-only (no network traffic): every Client computes this itself each time the HUD
         // needs to render, from its own NetworkManager.ServerTime estimate.
         public double GetBuildSeconds()
@@ -57,7 +64,12 @@ namespace Domino.GameFlow
             if (!_timerStarted.Value) return 0.0;
             if (NetworkManager == null) return _accumulatedBuildSeconds.Value;
 
-            bool active = GameFlowManager.Instance != null && IsActivePhase(GameFlowManager.Instance.CurrentPhase);
+            // Step 10A: Paused freezes BUILD TIME regardless of GamePhase - NetworkManager.
+            // ServerTime.Time keeps advancing in real time even while Time.timeScale == 0 (it is
+            // NGO's own network time estimate, not driven by the local Time class at all), so
+            // this must be checked explicitly rather than relying on Time.timeScale to freeze it
+            // for free the way Physics/Time.deltaTime-based timers elsewhere in the project do.
+            bool active = !IsPaused() && GameFlowManager.Instance != null && IsActivePhase(GameFlowManager.Instance.CurrentPhase);
             if (!active) return _accumulatedBuildSeconds.Value;
 
             return _accumulatedBuildSeconds.Value + (NetworkManager.ServerTime.Time - _activeSegmentStartServerTime.Value);
@@ -88,41 +100,72 @@ namespace Domino.GameFlow
             _finalBuildSeconds.Value = NotSet;
         }
 
+        // Step 10A: called synchronously (Server-only) by GameplayPauseManager the instant its
+        // Pause state changes, instead of waiting for this to be picked up by Update()'s polling
+        // below on some later tick. Time.timeScale == 0 does not slow Update() itself (only
+        // FixedUpdate) so that gap is at most one frame in any normally-running build - but
+        // GetBuildSeconds() is computed fresh on every call from the *current* Paused flag, so
+        // even a one-frame gap between "Paused flips" and "the accumulator/segment-start actually
+        // catches up" is a real (if brief) window where GetBuildSeconds() would read a stale
+        // _activeSegmentStartServerTime against the current ServerTime.Time and report a
+        // momentarily wrong value. Applying the transition here, synchronously, at the exact
+        // moment Paused changes removes that window entirely.
+        public void SyncPauseState(bool paused)
+        {
+            if (!IsServer) return;
+            if (GameFlowManager.Instance == null) return;
+
+            bool isActive = !paused && IsActivePhase(GameFlowManager.Instance.CurrentPhase);
+            ApplyActiveTransition(isActive);
+        }
+
+        private void ApplyActiveTransition(bool isActive)
+        {
+            if (isActive == _lastActiveState) return;
+
+            if (_timerStarted.Value)
+            {
+                if (_lastActiveState && !isActive)
+                {
+                    // Pausing, or leaving BUILDING/READY (e.g. -> RUNNING): fold the
+                    // just-finished active segment into the accumulated total.
+                    _accumulatedBuildSeconds.Value += NetworkManager.ServerTime.Time - _activeSegmentStartServerTime.Value;
+                }
+                else if (!_lastActiveState && isActive)
+                {
+                    // Resuming, or (re-)entering BUILDING/READY (e.g. FAILED -> BUILDING): start
+                    // a fresh active segment on top of the accumulated total - never reset to
+                    // zero here. On Resume this deliberately excludes the entire Paused duration,
+                    // since the segment starts counting from now, not from before the Pause.
+                    _activeSegmentStartServerTime.Value = NetworkManager.ServerTime.Time;
+                }
+            }
+
+            _lastActiveState = isActive;
+        }
+
         private void Update()
         {
             if (!IsServer) return;
             if (GameFlowManager.Instance == null) return;
 
             GamePhase phase = GameFlowManager.Instance.CurrentPhase;
-            if (phase == _lastObservedPhase) return;
 
-            GamePhase previous = _lastObservedPhase;
-            _lastObservedPhase = phase;
+            // Step 10A: Pause transitions are now applied synchronously by SyncPauseState above,
+            // not detected here - this only needs to watch for ordinary GamePhase transitions
+            // (e.g. BUILDING -> RUNNING) via the same ApplyActiveTransition, exactly as before.
+            ApplyActiveTransition(!IsPaused() && IsActivePhase(phase));
 
-            if (_timerStarted.Value)
+            if (phase != _lastObservedPhase)
             {
-                bool wasActive = IsActivePhase(previous);
-                bool isActive = IsActivePhase(phase);
+                _lastObservedPhase = phase;
 
-                if (wasActive && !isActive)
+                if (phase == GamePhase.SUCCESS)
                 {
-                    // Pausing (BUILDING/READY -> RUNNING): fold the just-finished active
-                    // segment into the accumulated total.
-                    _accumulatedBuildSeconds.Value += NetworkManager.ServerTime.Time - _activeSegmentStartServerTime.Value;
+                    // RUNNING already paused BUILD TIME above (or on a prior frame), so the
+                    // accumulated value is already the correct frozen total.
+                    _finalBuildSeconds.Value = _accumulatedBuildSeconds.Value;
                 }
-                else if (!wasActive && isActive)
-                {
-                    // Resuming (FAILED -> BUILDING): start a fresh active segment on top of
-                    // the accumulated total - never reset to zero here.
-                    _activeSegmentStartServerTime.Value = NetworkManager.ServerTime.Time;
-                }
-            }
-
-            if (phase == GamePhase.SUCCESS)
-            {
-                // RUNNING already paused BUILD TIME above (or on a prior frame), so the
-                // accumulated value is already the correct frozen total.
-                _finalBuildSeconds.Value = _accumulatedBuildSeconds.Value;
             }
         }
     }

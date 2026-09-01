@@ -101,7 +101,7 @@ Step 9より、Scene は `MainMenu.unity`(Build Index 0)と `SampleScene.unity`(
 
 ### SampleScene.unity(Gameplay Scene)
 
-Root GameObjectは次の7つです(Step 9で`NetworkManager`がMainMenu側へ移動したため、Step 8.6時点の8つから1つ減っています)。
+Root GameObjectは次の11個です(Step 8Bで追加した`GameplayHUD`、Step 9.2で追加した`PlayerSpawnPoints`、Step 10Aで追加した`GameplayPauseManager`を含みます)。
 
 | GameObject | 主なComponent | 役割 |
 |---|---|---|
@@ -110,10 +110,12 @@ Root GameObjectは次の7つです(Step 9で`NetworkManager`がMainMenu側へ移
 | **Directional Light** | Light | Universal 3Dテンプレート標準のライト |
 | **Global Volume** | Volume | URPのポストプロセス設定(テンプレート標準) |
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
-| **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
+| **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager`, `ChallengeTimer` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
+| **GameplayPauseManager**(Step 10A) | `NetworkObject`, `GameplayPauseManager` | Global PauseのServer Authoritative State(`NetworkVariable<bool>`)を持つScene-placed NetworkObject。`GameFlowManager`とは別GameObject(責務分離)。詳細は`PauseSystem.md`を参照 |
 | **GameFlowZones**(Step 6) | Transform のみ(空の親) | `StartArea` / `Checkpoint_01` / `Checkpoint_02` / `GoalArea` の4つのZoneインスタンスをまとめる親。実際のコース配置はStageごとに変わる想定で、詳細はStageAuthoring.mdを参照 |
 | **CameraPoints**(Step 7.6) | Transform のみ(空の親) | `OverviewCameraPoint` をまとめる親。RUNNING/SUCCESS/FAILED中のOverview Camera視点をStage側で設定するためのマーカー。詳細はStageAuthoring.md第9章を参照 |
-| **PlayerSpawnPoints**(Step 9.2) | Transform のみ(空の親) | `SpawnPoint_1`〜`SpawnPoint_4`(子Transform、Start Area内・互いに重ならない配置)をまとめる親。`GameplayPlayerSpawner`(MainMenu Scene側、後述)が`GameObject.Find("PlayerSpawnPoints")`でこのSceneロード後に検索し、接続Client順に(`clientIndex % 4`)割り当てる。`NetworkObject`は持たない、純粋なLocal配置マーカー |
+| **PlayerSpawnPoints**(Step 9.2) | Transform のみ(空の親) | `SpawnPoint_1`〜`SpawnPoint_4`(子Transform、Start Area内・互いに重ならない配置)をまとめる親。`GameplayPlayerSpawner`(MainMenu Scene側、後述)が`GameObject.Find("PlayerSpawnPoints")`でこのSceneロード後に検索し、接続Client順に(`clientIndex % 4`)割り当てる。`NetworkObject`は持たない、純粋なLocal配置マーカー。Step 10Aで、Restart/Retry時のPlayer再配置(`GameFlowManager.RepositionAllPlayersToSpawnPoints()`)にも同じ解決ロジックを再利用しています |
+| **GameplayHUD**(Step 8B) | Canvas, CanvasScaler, GraphicRaycaster, `GameplayHUD` | Phase別のGameplay UI(BUILD TIME・READY・FAILED・SUCCESS Result等)。Step 10AでPause Panel・Confirmation Dialogを追加。詳細は`GameFlow.md`「Challenge Timer / Gameplay HUD」・`PauseSystem.md`を参照 |
 
 **重要**: このScene自体には **Playerは1体も配置されていません**。Playerは接続時点ではなく、**このSceneのLoadが完了した時点で** `GameplayPlayerSpawner`(MainMenu Scene側常駐、後述)が`Player.prefab`を都度生成(Spawn)する形で登場します(Step 9.2、詳細はNetworking.md「Player Spawn Lifecycle」章を参照)。「Editor上で目に見える固定のキャラクター」ではなく「Gameplay Sceneのロードが完了した接続Clientの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**です。Step 3時点では`Domino.prefab`が`NetworkObject`を持たなかったため同期対象外でしたが、Step 5で`Domino.prefab`に`NetworkObject`が追加されたことで、これら20個も「In-Scene-Placed NetworkObject」という扱いを継承しています。現在`DominoLine`は非アクティブのため実際にSpawn/同期が走ることはありませんが、将来再度アクティブ化して使う場合はこの点に注意してください(詳細はImplementationStatus.mdのStep 5章を参照)。
 
@@ -149,8 +151,8 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | ファイル | クラス | 継承元 | 役割(一言で) |
 |---|---|---|---|
 | [PlayerStats.cs](../Assets/_Project/Scripts/Player/PlayerStats.cs) | `Domino.Player.PlayerStats` | `MonoBehaviour` | 移動速度などの数値を保持するだけの「データの入れ物」。ロジックは一切持たない |
-| [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用)。Step 7.6でStart Area拘束(`ConstrainToStartArea()`)を追加。Step 7.7で移動基準を常にCamera相対(Third Person/Overview自動切替)へ統一し直した(Step 7.6のPlayer相対化は撤回) |
-| [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更。Step 7.7でAnchor計算を一時的にCamera Aim基準へ変更したが、Step 7.8でCharacter正面基準へ復帰し、代わりにPlacement Mode中の自由なDomino Yaw回転(A/D)を追加 |
+| [PlayerMotor.cs](../Assets/_Project/Scripts/Player/Movement/PlayerMotor.cs) | `Domino.Player.PlayerMotor` | `NetworkBehaviour` | キーボード入力を読み取り、Rigidbodyを動かす。ネットワーク上で「自分のキャラクターかどうか」の判定もここで行う。Step 4で`SetMovementEnabled()`を追加(Placement Mode中の入力一時停止用)。Step 7.6でStart Area拘束(`ConstrainToStartArea()`)を追加。Step 7.7で移動基準を常にCamera相対(Third Person/Overview自動切替)へ統一し直した(Step 7.6のPlayer相対化は撤回)。Step 10Aで`ServerTeleportRpc()`を追加(Restart/RetryのPlayer Spawn Point再配置、`ApplyPushRpc`と同じOwner-Rpcパターン) |
+| [PlacementController.cs](../Assets/_Project/Scripts/Player/Placement/PlacementController.cs) | `Domino.Player.PlacementController` | `NetworkBehaviour` | Step 4で追加。Placement Modeの状態管理(開始/確定/キャンセル)とGhost Dominoの生成を行う。Step 5で確定時の処理を「ローカルInstantiate」から「HostへのRPC送信」に変更。Step 7.7でAnchor計算を一時的にCamera Aim基準へ変更したが、Step 7.8でCharacter正面基準へ復帰し、代わりにPlacement Mode中の自由なDomino Yaw回転(A/D)を追加。Step 10AでPause中の入力ブロックと、読み取り専用の`IsPlacing`プロパティ(Escapeキーの優先順位判定用)を追加 |
 | [GhostDomino.cs](../Assets/_Project/Scripts/Domino/GhostDomino.cs) | `Domino.DominoSystem.GhostDomino` | `MonoBehaviour` | Step 4で追加。配置プレビュー用のメトロノーム状の首振りアニメーションのみを行う。`NetworkObject`を持たない完全ローカルな見た目専用コンポーネント。Step 7.8で`SetBaseRotation()`を追加し、`PlacementController`からPlacement Mode中いつでもYawを更新できるようにした(Wobble計算自体は無変更) |
 | [DominoSpawner.cs](../Assets/_Project/Scripts/Domino/DominoSpawner.cs) | `Domino.DominoSystem.DominoSpawner` | `MonoBehaviour` | Step 5で追加。Host上でのみ、`PlacementController`からのRPCを受けて配置要求を検証し、正式なDomino`NetworkObject`をSpawnする。Step 7でSpawn直後の`DominoCleanupManager.Register()`呼び出しを追加 |
 | [DominoCleanupManager.cs](../Assets/_Project/Scripts/Domino/DominoCleanupManager.cs) | `Domino.DominoSystem.DominoCleanupManager` | `MonoBehaviour` | Step 7で追加。Host上でのみ、BUILDING中に倒れたまま`Cleanup Delay`秒経過したDominoを`NetworkObject.Despawn()`する。`DominoSpawner`が登録したDominoのみを一定間隔(`Check Interval`)でまとめて確認する(Domino単位の重い`Update()`は持たない) |
@@ -159,9 +161,10 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
 | [GameplayPlayerSpawner.cs](../Assets/_Project/Scripts/Networking/GameplayPlayerSpawner.cs) | `Domino.Networking.GameplayPlayerSpawner` | `MonoBehaviour` | Step 9.2で追加。Host上でのみ、Gameplay SceneのLoad完了を検知し、接続中の各ClientにつきPlayerを1体、Scene内の`PlayerSpawnPoints`へ明示的にSpawnする |
 | [PlacementMarker.cs](../Assets/_Project/Scripts/Player/Placement/PlacementMarker.cs) | `Domino.Player.PlacementMarker` | `MonoBehaviour` | Step 6で追加。床に表示するPlacement Markerの見た目(サイズ・不透明度)のみを扱う、完全ローカルの表示専用コンポーネント |
-| [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | Step 6で追加。`F`キー押下を`GameFlowManager`へのRPC呼び出しに変換する単機能スクリプト |
+| [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | Step 6で追加。`F`キー押下を`GameFlowManager`へのRPC呼び出しに変換する単機能スクリプト。Step 10AでPause中の入力ブロックを追加 |
 | [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | Step 6で追加。BUILDING/READY/RUNNING/SUCCESSの4状態を定義 |
-| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Step 6で追加。GamePhase/Checkpoint進捗をHost Authorityで管理し、NetworkVariableで同期する司令塔 |
+| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Step 6で追加。GamePhase/Checkpoint進捗をHost Authorityで管理し、NetworkVariableで同期する司令塔。Step 10AでRetry/Restartの共有Reset処理(`FullStageResetSequence()`)とPlayer Spawn Point再配置を追加 |
+| [GameplayPauseManager.cs](../Assets/_Project/Scripts/GameFlow/GameplayPauseManager.cs) | `Domino.GameFlow.GameplayPauseManager` | `NetworkBehaviour` | Step 10Aで追加。Global Pauseの Server Authoritative State(`NetworkVariable<bool>`)、`Time.timeScale`の適用、`ChallengeTimer`への同期的なPause通知を担う。詳細は`PauseSystem.md` |
 | [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | Step 6で追加。Zone内でDominoが倒れたかどうかを判定する共通基底クラス |
 | [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Step 6で追加。Start Domino判定に加え、Player Ready判定(全員がStart Areaに入ったか)を行う。Step 7.6で`ClampToLocalBounds()`を追加(`PlayerMotor`のStart Area拘束が利用するLocal空間クランプ)。Step 7.7で`ContainsWorldPoint()`を追加(`GameFlowManager`のReady Re-arm自己修復が利用するGround Truth判定) |
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Step 6で追加。Checkpoint判定と、明示的な通過順序(`CheckpointIndex`)を持つ |

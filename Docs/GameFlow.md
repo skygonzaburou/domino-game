@@ -526,9 +526,9 @@ private static bool IsConfinedToStartArea()
 
 ---
 
-## 9.6. Retry(Step 8.5で追加)
+## 9.6. Retry(Step 8.5で追加、Step 10AでRestartと共通化)
 
-SUCCESS画面のRetry Button(または`R`キー)から、Host/Clientどちらでも次のBuildへ進めます。
+SUCCESS画面のRetry Button(または`R`キー)から、Host/Clientどちらでも次のBuildへ進めます。Step 10Aで、Pause Menuの「Restart」(第9.7章)と同じ`FullStageResetSequence()`を共有するようになりました - Retry自体の挙動(SUCCESS限定、Confirmation不要)は変更していません。
 
 ```mermaid
 sequenceDiagram
@@ -537,11 +537,8 @@ sequenceDiagram
 
     P->>Server: RetryRequestRpc() [SendTo.Server, InvokePermission=Everyone]
     Note over Server: CurrentPhase == SUCCESS を確認(そうでなければ無視)
-    Note over Server: _isRetrying中なら無視(二重Retry防止)
-    Server->>Server: 全Network Domino Despawn
-    Server->>Server: ResetRunState()(Checkpoint Progress/Zone状態を全リセット)
-    Server->>Server: ChallengeTimer.ResetForRetry()
-    Server->>Server: Phase: SUCCESS → BUILDING
+    Note over Server: _isResettingStage中なら無視(二重実行防止)
+    Server->>Server: FullStageResetSequence()(第9.7章、Restartと共通)
 ```
 
 ```csharp
@@ -549,20 +546,70 @@ sequenceDiagram
 public void RetryRequestRpc(RpcParams rpcParams = default)
 {
     if (_phase.Value != GamePhase.SUCCESS) return;
-    if (_isRetrying) return;
+    if (_isResettingStage) return;
 
-    _isRetrying = true;
-    StartCoroutine(RetrySequence());
+    _isResettingStage = true;
+    StartCoroutine(FullStageResetSequence());
 }
 ```
 
 - **Host / Clientどちらから要求してもよい**: 現時点ではプロトタイプとして、`InvokePermission = RpcInvokePermission.Everyone`で誰からのRequestも受け付けます。Step 9でHost-only Game Controlへ変更する可能性があります(第「Step 9 Preparation」参照)。誰から呼ばれても、Server側で必ず`CurrentPhase == SUCCESS`を再検証しており、Client側の状態を無条件に信用していません
-- **二重Retry防止**: `_isRetrying`フラグにより、複数Playerがほぼ同時にRetryを要求しても、Reset処理(Domino Despawn+State Reset)が複数回実行されることはありません。最初の1回だけが処理され、以降のRequestは`CurrentPhase`が既に`SUCCESS`でなくなるか`_isRetrying`が立っている間、静かに無視されます
-- **Domino Despawn**: `FailureResetSequence()`(第9章)と同じ`DominoCleanupManager.DespawnAllRegistered()`を使い、Despawn完了を待ってから次へ進みます
-- **Timer Reset**: `ChallengeTimer.Instance.ResetForRetry()`を直接呼び出し、BUILD TIMEを完全に終了させます(`ChallengeTimer.md`参照)。これはGameFlowManagerからChallengeTimerへの数少ない直接呼び出しの1つです(通常はPhase Pollingで完結しています)
-- **Player Position**: Retry時にPlayerをTeleportし直すことはしていません。現在いる位置からそのままBUILDINGを再開します
+- **二重実行防止**: `_isResettingStage`フラグ(Step 10Aで`_isRetrying`から改名。Restartと共有)により、複数Playerがほぼ同時にRetryを要求しても、Reset処理が複数回実行されることはありません
+- **Domino Despawn / Timer Reset / Player Position**: 第9.7章「共有Reset処理の内容」を参照。**Player Positionは Step 10Aで変更**: 以前は「現在いる位置からそのままBUILDINGを再開」でしたが、Restartとの共通化にともない、Retryも各PlayerをSpawn Pointへ戻すようになりました
 - **Camera**: 明示的な切り替え処理は不要です。Phaseが`BUILDING`になった時点で、既存のCamera Blendロジック(`IsChallengeActive`)が自動的にThird Personへ戻します
 - **READY再開**: Retry直後はDominoが0個のため、Ready Re-armのような専用処理なしに自然と`BUILDING`のままとなります。その後Playerが新しいDominoを配置し、Standing Domino条件が再び満たされた時点で通常通り`READY`になります(第6章)
+
+---
+
+## 9.7. Pause / Restart(Step 10Aで追加)
+
+Gameplay中(BUILDING/READY/RUNNING)、`Esc`キーでPause Menuを開けます。Pauseの仕組み自体(Authority・Time.timeScale・BUILD TIMEとの連携)は`PauseSystem.md`にまとめました。本章では、Pause Menuの「Restart」がGameFlowManager側で何をするかに絞って説明します。
+
+### Restart Request
+
+```csharp
+[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+public void RequestRestartRpc(RpcParams rpcParams = default)
+{
+    if (GameplayPauseManager.Instance == null || !GameplayPauseManager.Instance.IsPaused) return;
+    if (_isResettingStage) return;
+
+    _isResettingStage = true;
+    StartCoroutine(FullStageResetSequence());
+}
+```
+
+Retry(第9.6章)がServer側で`CurrentPhase == SUCCESS`を必須とするのと対称的に、RestartはServer側で`GameplayPauseManager.IsPaused == true`を必須とします。Pause Menuからしか呼べないUI側の制約を、Server側でも独立に再検証しています。
+
+### 共有Reset処理の内容(`FullStageResetSequence()`)
+
+Retry・Restartのどちらから呼ばれても、同じ手順を実行します。
+
+```mermaid
+sequenceDiagram
+    participant Server as Server (Host)
+    participant DCM as DominoCleanupManager
+    participant CT as ChallengeTimer
+    participant GPS as GameplayPlayerSpawner
+    participant PM as PlayerMotor (各Owner)
+
+    Server->>DCM: DespawnAllRegistered() (Standing/Fallen問わず全Domino削除)
+    Note over Server: 完了をWaitUntilで待機
+    Server->>Server: ResetRunState() (Checkpoint Progress/Zone状態を全リセット)
+    Server->>CT: ResetForRetry() (BUILD TIMEを完全終了、次のFirst Dominoでゼロから)
+    Server->>GPS: ResolveSpawnPoints()
+    loop 接続中の各Client
+        Server->>PM: ServerTeleportRpc(spawnPoint.position, spawnPoint.rotation) [SendTo.Owner]
+        Note over PM: Owner自身がRigidbody.position/rotationを直接設定 + NetworkTransform.Teleport()
+    end
+    Server->>Server: Phase: BUILDING
+    Server->>Server: GameplayPauseManager.ServerForceUnpause() (Restart経由の場合のみ意味を持つ)
+    Server->>Server: ReevaluateReady()
+```
+
+- **Player Respawn(Step 10Aで新規)**: `GameplayPlayerSpawner.Instance.ResolveSpawnPoints()`(Networking.md「Player Spawn Lifecycle」)を再利用し、Step 9.2で作成した`PlayerSpawnPoints`へ各Clientを`clientIndex % spawnPoints.Length`で決定論的に再割り当てします。Player Ownershipは変更しません(Despawn/Respawnではなく、既存Player NetworkObjectの位置だけをリセット)。Owner Authorityを維持するため、ServerはClient所有のPlayerを直接動かさず、`PlayerMotor.ServerTeleportRpc()`(`[Rpc(SendTo.Owner)]`、`ApplyPushRpc`と同じパターン)でそのPlayer自身のOwnerに依頼します
+- **Domino Despawn**: Standing/Fallenを問わず全Domino削除(`DespawnAllRegistered()`)。FAILED時のFallen-onlyクリーンアップ(`DespawnFallenRegistered()`、第9章)とは別物です
+- **Unpause**: `GameplayPauseManager.ServerForceUnpause()`を無条件に呼びますが、Retry経由(Pauseと同時に起こり得ない、`PauseSystem.md`参照)では実質no-opです
 
 ---
 
@@ -571,13 +618,14 @@ public void RetryRequestRpc(RpcParams rpcParams = default)
 | ファイル | クラス | 継承元 | 役割 |
 |---|---|---|---|
 | [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | ゲーム進行状態の定義 |
-| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Phase/Checkpoint進捗をHost Authorityで管理し、NetworkVariameで同期する司令塔。Step 7.5でExpected Zone順序判定・Chain Stop Failure監視・Failure Resetを追加。Step 8.5でReady Re-armを廃止しStanding Domino条件を追加、`IsMovementConfined`分離、Retryを追加 |
+| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Phase/Checkpoint進捗をHost Authorityで管理し、NetworkVariameで同期する司令塔。Step 7.5でExpected Zone順序判定・Chain Stop Failure監視・Failure Resetを追加。Step 8.5でReady Re-armを廃止しStanding Domino条件を追加、`IsMovementConfined`分離、Retryを追加。Step 10AでRetryを`FullStageResetSequence()`として一般化し、Pause MenuのRestart(`RequestRestartRpc`)と共有。Player Spawn Point再配置もこのStepで追加 |
+| [GameplayPauseManager.cs](../Assets/_Project/Scripts/GameFlow/GameplayPauseManager.cs) | `Domino.GameFlow.GameplayPauseManager` | `NetworkBehaviour` | Step 10Aで追加。Global Pause(Server Authoritative `NetworkVariable<bool>`)・`Time.timeScale`の実際の適用・BUILD TIMEとの連携を担う。詳細は`PauseSystem.md`を参照 |
 | [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | 「Zone内でDominoが倒れたか」を判定する共通ロジック。Step 8.5で`CountStandingInside()`を追加(READY条件のStanding Domino判定に使用) |
 | [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Start Domino判定 + Player Ready判定 |
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Checkpoint判定 + 通過順序(`CheckpointIndex`) |
 | [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Goal判定 |
 | [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | `F`キー押下をHostへのRPC呼び出しに変換する |
-| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加(当時はRUNNING時間計測)。Step 8.5でBUILD TIME(BUILDING/READY中に進み、RUNNING/FAILED中はPause)へ全面変更(詳細は`ChallengeTimer.md`) |
-| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。Phase別のCanvas UI表示。Step 8.5でBUILD TIME表示を常時化し、SUCCESS用Retry Button(Mouse Click / Rキー)を追加 |
+| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加(当時はRUNNING時間計測)。Step 8.5でBUILD TIME(BUILDING/READY中に進み、RUNNING/FAILED中はPause)へ全面変更(詳細は`ChallengeTimer.md`)。Step 10Aで`GameplayPauseManager.IsPaused`も加味してPauseするよう変更(`PauseSystem.md`) |
+| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。Phase別のCanvas UI表示。Step 8.5でBUILD TIME表示を常時化し、SUCCESS用Retry Button(Mouse Click / Rキー)を追加。Step 10AでPause Panel・Confirmation Dialog・Escapeキー処理を追加(`PauseSystem.md`) |
 
 Zone自体(`NetworkObject`を持たない)はStage(Scene)側に配置するPrefabで、Stage Authoringの詳細は`StageAuthoring.md`を参照してください。Time Attack計測(`ChallengeTimer`)とGameplay HUD(`GameplayHUD`)の詳細は`ChallengeTimer.md`を参照してください。
