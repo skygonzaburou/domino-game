@@ -1,6 +1,6 @@
 # GameFlow(ゲームの進行管理)
 
-このドキュメントは、Step 6で追加し、Step 7.5で`FAILED`と厳密なClear判定を追加した「BUILDING → READY → RUNNING → SUCCESS / FAILED」というゲーム進行の仕組みについて、実際の実装を基に説明します。対象読者は、Unity/Netcodeを久しぶりに触る開発者を想定しています。
+このドキュメントは、Step 6で追加し、Step 7.5で`FAILED`と厳密なClear判定を追加した「BUILDING → READY → RUNNING → SUCCESS / FAILED」というゲーム進行の仕組みについて、実際の実装を基に説明します。対象読者は、Unity/Netcodeを久しぶりに触る開発者を想定しています。Step 8.5で、READY条件の再設計・SUCCESS中のPlayer移動解放・Retryを追加しています。
 
 ---
 
@@ -27,7 +27,12 @@ public enum GamePhase
 | **SUCCESS** | Start→Checkpoint→Goalを正しい順序で通過し終えた状態 | 不可 | (クリア済み。Dominoは削除されず残る) |
 | **FAILED** | 順序違反、またはChainが途中で完全に静止して失敗した状態 | 不可 | (失敗確定。表示後、全Domino削除→BUILDINGへ) |
 
-Step 7.6で、Player Camera(Overview⇔Third Person)とPlayer移動範囲(Start Area拘束)もこのPhaseに連動するようになりました。`GameFlowManager.IsChallengeActive`(`RUNNING || SUCCESS || FAILED`のいずれか)という1つのプロパティが、両方の切り替え判定の共通の拠り所です。詳細は`PlayerSystem.md`の「RUNNING中のPlayer移動制限とOverview Camera」章を参照してください。
+Step 7.6で、Player Camera(Overview⇔Third Person)とPlayer移動範囲(Start Area拘束)もこのPhaseに連動するようになりました。Step 8.5で、この2つの切り替え判定を担うプロパティを分離しています。
+
+- `GameFlowManager.IsChallengeActive`(`RUNNING || SUCCESS || FAILED`) - **Camera**(Overview⇔Third Person)の切り替え判定。SUCCESS中もOverview Cameraを維持するため、SUCCESSを含みます
+- `GameFlowManager.IsMovementConfined`(`RUNNING || FAILED`) - **Player移動範囲**(Start Area拘束)の判定。SUCCESS中はPlayerがStageを自由に歩けるようにするため、SUCCESSを含みません(Step 8.5で分離。それ以前は両方とも`IsChallengeActive`を共用していました)
+
+詳細は`PlayerSystem.md`の「RUNNING中のPlayer移動制限とOverview Camera」章、およびSUCCESS中のExplorationについては本ドキュメント第7.5章を参照してください。
 
 ---
 
@@ -36,15 +41,16 @@ Step 7.6で、Player Camera(Overview⇔Third Person)とPlayer移動範囲(Start 
 ```mermaid
 stateDiagram-v2
     [*] --> BUILDING
-    BUILDING --> READY: 全PlayerがStart Areaに入る
-    READY --> BUILDING: 誰か1人でもStart Areaから出る
+    BUILDING --> READY: 全PlayerがStart Area内 かつ Start Area内にStanding Dominoが1つ以上
+    READY --> BUILDING: どちらかの条件が崩れる(Player退出 or Standing Dominoが0に)
     READY --> RUNNING: 誰かがStart Challenge操作(Fキー)を行う
     RUNNING --> SUCCESS: Start→CP1→CP2→Goalを正しい順序で通過
     RUNNING --> FAILED: 順序違反 または Chainが途中で完全停止
     FAILED --> BUILDING: Failure表示 → 全Domino Despawn → Progress Reset
+    SUCCESS --> BUILDING: Retry(Step 8.5)
 ```
 
-`SUCCESS`から`BUILDING`へ戻る経路(Retry/Next Stage)は今回意図的に実装していません(Step 6・7.5いずれの対象外です)。`FAILED`から`BUILDING`へは自動的に戻りますが、その直後すぐに`READY`へ進めるわけではない点に注意してください(第9章「Ready Re-arm」を参照)。
+`SUCCESS`から`BUILDING`へ戻る経路は、Step 8.5でRetryとして実装しました(第9.5章)。`FAILED`から`BUILDING`へは自動的に戻り、Step 8.5以降はその直後でも(Player全員がStart Area内かつStanding Dominoが1つ以上あれば)即座に`READY`へ進みます - 過去にFailureしたことや、一度Start Areaから退出したかどうかは一切考慮しません(第6章参照)。
 
 ---
 
@@ -221,46 +227,55 @@ sequenceDiagram
 
 `GameFlowManager`は`_playersInStartArea`(`HashSet<ulong>`)で「今Start Area内にいるClientId」を管理し、`NetworkManager.ConnectedClientsIds`(現在接続中の全Client)と突き合わせて「全員揃っているか」を判定します。誰かが切断した場合も`OnClientDisconnectCallback`で追跡から外れるため、既に切断した人を待ち続けることはありません。
 
-### Ready Re-arm(Step 7.5で追加)
+### Standing Dominoの条件(Step 8.5)
 
-`FAILED`から`BUILDING`へ自動的に戻った直後、RUNNING中にStart Areaへ入ったままだったPlayerがまだそこに残っていることがあります。何もしなければ、`_playersInStartArea`が既に「全員揃っている」状態のままなので、Domino Reset完了と同時に即座に`READY`へ戻ってしまい、Playerが新しくDominoを置き直す間もなく再挑戦を促されてしまいます。
-
-これを防ぐため、`_readyRearmPending`というフラグを設けました。Failure Reset(第9章)の最後で`true`にセットされ、`ReevaluateReady()`はこのフラグが立っている間、たとえ`AllConnectedPlayersInStartArea()`が`true`でも`READY`へは進みません。
+READYになるには、Player条件に加えて**Start Area内にStanding(倒れていない)Real Dominoが1つ以上存在すること**も必要です。
 
 ```csharp
+// GameFlowManager.cs
 private void ReevaluateReady()
 {
     if (!IsServer) return;
     if (_phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED) return;
 
-    if (_readyRearmPending)
-    {
-        if (_playersInStartArea.Count > 0) return;  // 全員退出するまでREADYへ進めない
-        _readyRearmPending = false;
-    }
+    ReconcilePlayersInStartArea();
 
-    bool allReady = AllConnectedPlayersInStartArea();
-    ...
+    bool allReady = AllConnectedPlayersInStartArea() && startArea.CountStandingInside() > 0;
+
+    if (allReady && _phase.Value == GamePhase.BUILDING) SetPhase(GamePhase.READY);
+    else if (!allReady && _phase.Value == GamePhase.READY) SetPhase(GamePhase.BUILDING);
 }
 ```
 
-`_playersInStartArea.Count`が`0`になった(=全Playerが一度でもStart Areaの外へ出た)瞬間にフラグが解除され、以後は通常通り「全員揃ったらREADY」の判定に戻ります。これにより、Failure後の自然な流れは次のようになります。
+`CountStandingInside()`は`DominoFallenZone`(全Zone共通の基底クラス)に追加したメソッドで、そのZoneの`OnTriggerEnter`/`OnTriggerExit`で追跡している`_dominoesInside`(RUNNING中のFresh Fallen Event判定にも使っている、既存のTrigger追跡Set)から、現在倒れていない(`fallenAngleThreshold`未満の)Dominoの数を数えます。Marker/GhostはNetworkObjectでもDomino Tagでもないため対象になりません。
 
-```mermaid
-sequenceDiagram
-    participant GFM as GameFlowManager
-    Note over GFM: FAILED → Domino Reset → BUILDING(_readyRearmPending=true)
-    Note over GFM: PlayerたちがまだStart Area内にいてもREADYへ進まない
-    GFM->>GFM: 全Playerが一度Start Areaから退出(Count=0)
-    GFM->>GFM: _readyRearmPending = false
-    Note over GFM: PlayerはBUILDINGで自由にDominoを組み直せる
-    GFM->>GFM: 全Playerが再びStart Areaへ入る
-    GFM->>GFM: Phase: BUILDING → READY
+```csharp
+// DominoFallenZone.cs
+public int CountStandingInside()
+{
+    _dominoesInside.RemoveWhere(t => t == null);  // Step 7.1由来のnull pruning
+    int count = 0;
+    foreach (var t in _dominoesInside)
+    {
+        if (!IsFallen(t)) count++;
+    }
+    return count;
+}
 ```
 
-Failure Reset完了時にPlayerが既に全員Start Areaの外にいた場合(RUNNING中に外へ出ていた等)も取りこぼさないよう、Reset処理の最後で`ReevaluateReady()`を明示的に一度呼び、その場でフラグを解除できるようにしています。
+Scene全体を`FindObjects`する構成ではなく、そのZoneに物理的に入っているDominoの数だけをループするため負荷は小さく、呼び出しタイミングも(Player判定と同じく)Trigger Event発生時・定期Poll時などの離散的なタイミングに限られます。
+
+READYはこの2条件(全PlayerがStart Area内 かつ Standing Dominoが1つ以上)**だけ**で毎回ゼロから判定されます。過去のFailure履歴・退出履歴・Re-arm状態などを一切保持しません(次項参照)。
+
+### 過去の設計: Ready Re-arm(Step 7.5で追加、Step 8.5で廃止)
+
+Step 7.5〜Step 8では、`FAILED`から`BUILDING`へ戻った直後に「全Playerが一度Start Areaから退出するまでREADYにしない」という`_readyRearmPending`フラグによるRe-arm機構がありました。これはPlayer条件だけでREADYを判定していた当時、Failure直後もStart Area内にPlayerが残っていると即座に(Domino配置し直す間もなく)READYへ戻ってしまう問題への対策でした。
+
+Step 8.5で、READY条件にStanding Domino数を追加したことで、この問題は**構造的に**発生しなくなりました。Failure ResetはDominoを全Despawnするため、Reset直後は必ずStanding Domino数が`0`になり、Playerが新しいDominoを配置し終えるまで自然にBUILDINGのままとどまります。この動作はGame Design上の意図的な変更でもあり(退出/再入場という手間を要求する必要がそもそも無くなった)、`_readyRearmPending`フィールド・関連するGate処理は完全に削除しました。Dead Stateとして残していません。
 
 ### バグ修正の記録: 2回目以降READYにならない問題(Step 7.7)
+
+(以下はPlayer側の追跡機構の来歴です。Re-arm自体はStep 8.5で廃止済みですが、ここで導入された`ReconcilePlayersInStartArea()`によるPlayer位置の自己修復の仕組み自体は現在も使用しています。)
 
 Step 7.5時点の実装では、`_playersInStartArea`の更新を`OnTriggerEnter`/`OnTriggerExit`イベントの発生**だけ**に依存していました。1回目のFailure後は正しく動作しましたが、実際にプレイを重ねると、2回目以降のRe-armで`_playersInStartArea`のCountが`0`に戻らず、`READY`へ二度と進めなくなる不具合が報告されました。
 
@@ -328,6 +343,9 @@ public void RequestStartChallengeRpc(RpcParams rpcParams = default)
     if (_phase.Value != GamePhase.READY) return;
     if (!AllConnectedPlayersInStartArea()) return;
 
+    // Defensive re-check (Step 8.5) - see "DominoなしRUNNINGを防止する" below
+    if (startArea.CountStandingInside() <= 0) return;
+
     BeginRun();
 }
 ```
@@ -337,6 +355,12 @@ public void RequestStartChallengeRpc(RpcParams rpcParams = default)
 `ChallengeInput.cs`をあえて`PlacementController`と別スクリプトにしているのは、これが配置操作とは無関係な単発の入力トリガーであり、将来UIボタンに置き換える際に配置システムを一切触らずに済むようにするためです。
 
 > **開発時の注意(Step 7.8.1)**: Unity Editor上のPlay Modeでは、Input System設定`editorInputBehaviorInPlayMode = PointersAndKeyboardsRespectGameViewFocus`により、**Game ViewウィンドウがOSフォーカスを持っていない間、キーボード/マウス入力そのものが無視されます**。「Fキーを押してもRUNNINGへ進まない」「WASDで動かない」といった症状に遭遇した場合、まずGame Viewを一度クリックしてフォーカスを与えてから再試行してください。ビルド済みのPlayerではこの制約は発生しません。Console上の`[GameFlowManager] Phase -> ...`ログの有無で、「Phase遷移自体が起きたか」を切り分けられます。
+
+### DominoなしRUNNINGを防止する(Step 8.5)
+
+Step 8.5以前は、READY条件がPlayer位置だけだったため、理論上「全PlayerがStart Areaにいるだけ(Dominoは1つも配置していない)」状態でもREADYになり得ました。この状態でRUNNINGへ入ると、`_startTriggered`が永遠に`true`にならない(倒れるStart Dominoがそもそも存在しない)ため、Chain Stop Failure監視すら発動せず(`GameFlowManager.Update()`は`if (!_startTriggered.Value) return;`で早期returnする)、RUNNINGが永久に終わらないという状態になり得ました。
+
+Step 8.5でREADY条件にStanding Domino数を追加したことで、この状態へは通常入れなくなりましたが、念のため`RequestStartChallengeRpc()`側にも同じ条件のDefensive Checkを重ねています。READY判定用の「UI状態」やClient側のキャッシュを信用せず、RUNNINGへ実際に入る直前にもう一度Server側の実データ(`CountStandingInside()`)で確認する、という設計です。
 
 ---
 
@@ -441,13 +465,87 @@ private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
 
 全Dominoの削除が完了する(`onComplete`が呼ばれる)まで`GameFlowManager`は`BUILDING`へ戻さず待機します。これにより「Despawn途中でPlayerがもう配置を始めてしまう」ような状態を避けています。
 
-### SUCCESSではリセットしない
+### SUCCESSでは自動リセットしない
 
-`SUCCESS`はこのリセットフローの対象外です。成功したDomino Chainはそのまま画面に残り、Retry/Next Stage等は将来のStepで扱います。
+`SUCCESS`はこの(FAILED時の)自動リセットフローの対象外です。成功したDomino Chainはそのまま画面に残ります。Playerの明示的な操作(Retry、第9.6章)でのみリセットされます。
 
 ### Cleanupとの責務分離
 
 `DespawnAllRegistered()`・`AnyTrackedDominoActive()`はいずれも`DominoCleanupManager`の既存Registry(Step 7で`DominoSpawner`がSpawn時に登録したリスト)を読み書きするだけで、`GamePhase`等のGameFlow状態には一切触れません。逆に`GameFlowManager`側も、Step 7から続く「BUILDING中に倒れたまま3秒経過したDominoを個別に削除する」通常のCleanup(`DominoCleanupManager.Update()`)には一切関与していません。**BUILDING中の個別Cleanup(Step 7)**と**FAILED時の一括Reset(Step 7.5)**は、目的も実行タイミングも完全に別のものです。詳細は`DominoLifecycle.md`を参照してください。
+
+---
+
+## 9.5. SUCCESS Exploration(Step 8.5で追加)
+
+SUCCESS後、PlayerはOverview Cameraのまま、自分たちが組んだDomino Routeを自由に歩いて見て回れます。
+
+| 項目 | RUNNING | SUCCESS |
+|---|---|---|
+| Camera | Overview | Overview(同じ。`IsChallengeActive`は変更していません) |
+| Start Area Constraint | あり | **なし**(`IsMovementConfined`がSUCCESSを含まないため) |
+| Movement Basis | Screen-relative(Overview Camera基準) | Screen-relative(同じ) |
+| Domino Placement | 不可 | 不可(`PlacementController`自体は無変更。`CurrentPhase != BUILDING`のGateがそのまま効く) |
+| Domino | そのまま | そのまま(Despawnしない) |
+
+`PlayerMotor.ApplyMovement()`のMovement Basis(W=Screen Up等)自体は元々`ThirdPersonCamera.Instance.transform`から計算しており、Phaseによる分岐はありません(`PlayerSystem.md`第4章参照)。そのためCameraがOverviewのままである限り、SUCCESS中も自然にScreen-relative Movementのまま動作し、この点についてコード変更は不要でした。変更したのはStart Area Constraintの可否判定(`IsMovementConfined`)だけです。
+
+```csharp
+// GameFlowManager.cs
+public bool IsChallengeActive =>
+    _phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED;
+
+// SUCCESS中はConstraintを外すため、IsChallengeActiveとは別に定義(Step 8.5)
+public bool IsMovementConfined =>
+    _phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.FAILED;
+```
+
+```csharp
+// PlayerMotor.cs
+private static bool IsConfinedToStartArea()
+{
+    return GameFlowManager.Instance != null && GameFlowManager.Instance.IsMovementConfined;
+}
+```
+
+---
+
+## 9.6. Retry(Step 8.5で追加)
+
+SUCCESS画面のRetry Button(または`R`キー)から、Host/Clientどちらでも次のBuildへ進めます。
+
+```mermaid
+sequenceDiagram
+    participant P as Player (Host or Client)
+    participant Server as Server (Host)
+
+    P->>Server: RetryRequestRpc() [SendTo.Server, InvokePermission=Everyone]
+    Note over Server: CurrentPhase == SUCCESS を確認(そうでなければ無視)
+    Note over Server: _isRetrying中なら無視(二重Retry防止)
+    Server->>Server: 全Network Domino Despawn
+    Server->>Server: ResetRunState()(Checkpoint Progress/Zone状態を全リセット)
+    Server->>Server: ChallengeTimer.ResetForRetry()
+    Server->>Server: Phase: SUCCESS → BUILDING
+```
+
+```csharp
+[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+public void RetryRequestRpc(RpcParams rpcParams = default)
+{
+    if (_phase.Value != GamePhase.SUCCESS) return;
+    if (_isRetrying) return;
+
+    _isRetrying = true;
+    StartCoroutine(RetrySequence());
+}
+```
+
+- **Host / Clientどちらから要求してもよい**: 現時点ではプロトタイプとして、`InvokePermission = RpcInvokePermission.Everyone`で誰からのRequestも受け付けます。Step 9でHost-only Game Controlへ変更する可能性があります(第「Step 9 Preparation」参照)。誰から呼ばれても、Server側で必ず`CurrentPhase == SUCCESS`を再検証しており、Client側の状態を無条件に信用していません
+- **二重Retry防止**: `_isRetrying`フラグにより、複数Playerがほぼ同時にRetryを要求しても、Reset処理(Domino Despawn+State Reset)が複数回実行されることはありません。最初の1回だけが処理され、以降のRequestは`CurrentPhase`が既に`SUCCESS`でなくなるか`_isRetrying`が立っている間、静かに無視されます
+- **Domino Despawn**: `FailureResetSequence()`(第9章)と同じ`DominoCleanupManager.DespawnAllRegistered()`を使い、Despawn完了を待ってから次へ進みます
+- **Timer Reset**: `ChallengeTimer.Instance.ResetForRetry()`を直接呼び出し、BUILD TIMEを完全に終了させます(`ChallengeTimer.md`参照)。これはGameFlowManagerからChallengeTimerへの数少ない直接呼び出しの1つです(通常はPhase Pollingで完結しています)
+- **Player Position**: Retry時にPlayerをTeleportし直すことはしていません。現在いる位置からそのままBUILDINGを再開します
+- **Camera**: 明示的な切り替え処理は不要です。Phaseが`BUILDING`になった時点で、既存のCamera Blendロジック(`IsChallengeActive`)が自動的にThird Personへ戻します
+- **READY再開**: Retry直後はDominoが0個のため、Ready Re-armのような専用処理なしに自然と`BUILDING`のままとなります。その後Playerが新しいDominoを配置し、Standing Domino条件が再び満たされた時点で通常通り`READY`になります(第6章)
 
 ---
 
@@ -456,13 +554,13 @@ private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
 | ファイル | クラス | 継承元 | 役割 |
 |---|---|---|---|
 | [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | ゲーム進行状態の定義 |
-| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Phase/Checkpoint進捗をHost Authorityで管理し、NetworkVariableで同期する司令塔。Step 7.5でExpected Zone順序判定・Chain Stop Failure監視・Failure Reset・Ready Re-armを追加 |
-| [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | 「Zone内でDominoが倒れたか」を判定する共通ロジック |
+| [GameFlowManager.cs](../Assets/_Project/Scripts/GameFlow/GameFlowManager.cs) | `Domino.GameFlow.GameFlowManager` | `NetworkBehaviour` | Phase/Checkpoint進捗をHost Authorityで管理し、NetworkVariameで同期する司令塔。Step 7.5でExpected Zone順序判定・Chain Stop Failure監視・Failure Resetを追加。Step 8.5でReady Re-armを廃止しStanding Domino条件を追加、`IsMovementConfined`分離、Retryを追加 |
+| [DominoFallenZone.cs](../Assets/_Project/Scripts/GameFlow/DominoFallenZone.cs) | `Domino.GameFlow.DominoFallenZone` | `MonoBehaviour`(abstract) | 「Zone内でDominoが倒れたか」を判定する共通ロジック。Step 8.5で`CountStandingInside()`を追加(READY条件のStanding Domino判定に使用) |
 | [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Start Domino判定 + Player Ready判定 |
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Checkpoint判定 + 通過順序(`CheckpointIndex`) |
 | [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Goal判定 |
 | [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | `F`キー押下をHostへのRPC呼び出しに変換する |
-| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加。RUNNING開始からSUCCESSまでのTime Attack計測(詳細は`ChallengeTimer.md`) |
-| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。Phase別のCanvas UI表示(BUILDING/READY/RUNNING Timer/FAILED/SUCCESS Result) |
+| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加(当時はRUNNING時間計測)。Step 8.5でBUILD TIME(BUILDING/READY中に進み、RUNNING/FAILED中はPause)へ全面変更(詳細は`ChallengeTimer.md`) |
+| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。Phase別のCanvas UI表示。Step 8.5でBUILD TIME表示を常時化し、SUCCESS用Retry Button(Mouse Click / Rキー)を追加 |
 
 Zone自体(`NetworkObject`を持たない)はStage(Scene)側に配置するPrefabで、Stage Authoringの詳細は`StageAuthoring.md`を参照してください。Time Attack計測(`ChallengeTimer`)とGameplay HUD(`GameplayHUD`)の詳細は`ChallengeTimer.md`を参照してください。

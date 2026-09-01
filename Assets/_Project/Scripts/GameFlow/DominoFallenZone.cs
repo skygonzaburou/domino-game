@@ -35,6 +35,24 @@ namespace Domino.GameFlow
             }
         }
 
+        // Ground-truth count of currently Standing (non-fallen) "Domino"-tagged objects
+        // physically inside this Zone's trigger right now (Step 8.5, used by StartAreaZone for
+        // the READY condition). Independent of the RUNNING-only IsSatisfied/_excludedDominoes
+        // bookkeeping above - just reuses the same _dominoesInside trigger-tracked set, pruning
+        // stale (destroyed) references opportunistically the same way OnRunStart() does. Bounded
+        // by how many Dominoes are actually inside this Zone, never a Scene-wide search.
+        public int CountStandingInside()
+        {
+            _dominoesInside.RemoveWhere(t => t == null);
+
+            int count = 0;
+            foreach (var t in _dominoesInside)
+            {
+                if (!IsFallen(t)) count++;
+            }
+            return count;
+        }
+
         protected virtual void OnTriggerEnter(Collider other)
         {
             if (!other.CompareTag("Domino")) return;

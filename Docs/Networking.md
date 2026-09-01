@@ -394,3 +394,28 @@ sequenceDiagram
 - **Clamp**: Push適用先の`PlayerMotor.ApplyPushRpc()`は水平成分のみを`_pushVelocity`へ加算し(`horizontalVelocity.y = 0`で明示的にYを無視)、`Vector3.ClampMagnitude(..., maxPushSpeed)`で連続Pushによる際限ない加速を防いでいます
 
 詳細な設計判断・パラメータは`PlayerSystem.md`「4.6. Player Collision Stability / Player-vs-Player Push」を参照してください。
+
+---
+
+## 22. Retry(SUCCESS → BUILDING)のAuthority Flow(Step 8.5)
+
+```mermaid
+sequenceDiagram
+    participant P as Player (Host or Client)
+    participant Server as Server (Host)
+
+    P->>Server: RetryRequestRpc() [SendTo.Server, InvokePermission=Everyone]
+    Note over Server: CurrentPhase == SUCCESS を確認(そうでなければ即return)
+    Note over Server: _isRetrying中なら即return(二重実行防止)
+    Server->>Server: 全Network Domino Despawn(DominoCleanupManager)
+    Server->>Server: ResetRunState() + ChallengeTimer.ResetForRetry()
+    Server->>Server: Phase: SUCCESS → BUILDING(NetworkVariable経由で全Clientへ配信)
+```
+
+- **Timer Authority**: BUILD TIME(`ChallengeTimer`)は完全にHost/Server Authorityです。`_accumulatedBuildSeconds`・`_activeSegmentStartServerTime`・`_finalBuildSeconds`・`_timerStarted`はすべて`NetworkVariableWritePermission.Server`で、Client側から書き換える経路はありません。表示用の計算(`GetBuildSeconds()`)は各ClientがLocalで行いますが、参照する`NetworkManager.ServerTime.Time`自体がNGOの標準的な時刻同期機構によるServer時刻の推定値であるため、Host/Client間で表示される数値が食い違うことは基本的にありません
+- **Start Time同期**: RUNNING開始時(正確にはBUILD TIMEのPause開始時)に何かを新規同期するわけではなく、既存の`_accumulatedBuildSeconds`(Pause済みの値としてそのまま各Clientに見える)を使い続けるだけです。新しいBuild Session自体の開始は`_timerStarted`/`_activeSegmentStartServerTime`の1回の書き込みで同期されます(`ChallengeTimer.md`参照)
+- **Final Time同期**: SUCCESS時に`_finalBuildSeconds`へ1回だけ書き込み、以降Host/Client双方が同じ値を表示し続けます
+- **Retry要求のAuthority**: Retry自体のGame State Reset(Domino Despawn・Progress Reset・Timer Reset・Phase遷移)は必ずServer/Hostが実行します。現時点ではプロトタイプとしてHost/Clientどちらも`RetryRequestRpc`を要求できますが(`InvokePermission = RpcInvokePermission.Everyone`)、実際にResetを行うかどうかはServer側で`CurrentPhase == SUCCESS`を再検証した上で決定しており、Clientが要求した内容をそのまま信用して実行しているわけではありません
+- **二重実行防止**: `_isRetrying`フラグ(Server側のみが読み書き)により、複数Playerからほぼ同時にRequestが来ても、Domino DespawnとState Resetが複数回走ることはありません
+
+詳細な設計判断は`GameFlow.md`「9.6. Retry」を参照してください。

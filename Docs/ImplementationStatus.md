@@ -664,6 +664,66 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 
 ---
 
+## Step 8.5: Build Time / READY Condition / Success Exploration / Retry
+
+Step 8Bで実装したRUNNING時間計測のTimerを廃止し、「PlayerがDominoをBuildするために使った累計時間」を計測するBUILD TIMEへ全面変更しました。また、Failure後に一度Start Areaから退出しないとREADYにならない仕様(Ready Re-arm)を廃止し、「全PlayerがStart Area内 + Start Area内にStanding Dominoが1つ以上」という現在の状態だけで判定するREADY条件へ再設計しました。SUCCESS中はStart Area Constraintを解除してPlayerが自由に歩けるようにし、SUCCESS画面にRetry機能を追加しました。Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)およびStep 8Aで完成したPlayer Physics(Collision Spin Fix/Rigidbody Rotation Constraints/Player Push関連、`PlayerPushController.cs`)には一切変更を加えていません。
+
+### 実装済み
+
+**BUILD TIME**
+- `ChallengeTimer.cs`を全面改修。`_timerStarted`/`_accumulatedBuildSeconds`/`_activeSegmentStartServerTime`/`_finalBuildSeconds`という4つの`NetworkVariable`のみを管理し(Per-frame同期は無し)、`GamePhase`がBUILDING/READYの間をActive(進行)、RUNNING/FAILEDの間をPaused(停止)として扱う
+- `DominoSpawner.cs`のReal Domino Network Spawn成功直後に`ChallengeTimer.Instance?.NotifyDominoPlaced()`を追加。Marker/E/Ghost/Left Click/RPC送信だけでは開始せず、Host側の検証を通過した最初のSpawnでのみBUILD TIMEが開始する。`PlacementController.cs`(Freeze対象)には一切変更を加えていない
+- FAILED→BUILDINGの度に、Pause前のAccumulated値からResumeする(0へは戻さない)ため、複数回Failureしても正味のBuild時間だけが積み上がる
+- SUCCESS時、Pause済みの値をそのまま`FinalBuildSeconds`として確定
+- Retry(後述)時のみ、`ChallengeTimer.Instance.ResetForRetry()`により完全リセット
+
+**READY Condition Redesign**
+- `GameFlowManager.cs`から`_readyRearmPending`フィールドおよび関連するGate処理を完全に削除(Dead Stateとして残していない)
+- `DominoFallenZone.cs`に`CountStandingInside()`を追加。各Zoneが既存の`_dominoesInside`(Trigger追跡、null pruning込み)から、`fallenAngleThreshold`(既定60°)未満の(倒れていない)Real/Network Spawned Dominoの数を数える。Scene全体のFindObjectsは行わない
+- `GameFlowManager.ReevaluateReady()`のREADY条件を`AllConnectedPlayersInStartArea() && startArea.CountStandingInside() > 0`へ変更。過去のFailure履歴・退出履歴を一切参照しない、現在の状態だけによる毎回ゼロからの判定
+- `GameFlowManager.RequestStartChallengeRpc()`にも同じStanding Domino条件のDefensive Checkを追加。READY条件だけを信用せず、実際にRUNNINGへ入る直前にもう一度Server側の実データで再検証する
+
+**SUCCESS Exploration**
+- `GameFlowManager.cs`に`IsMovementConfined`(`RUNNING || FAILED`)を新設し、Camera用の`IsChallengeActive`(`RUNNING || SUCCESS || FAILED`、無変更)から分離
+- `PlayerMotor.IsConfinedToStartArea()`の参照先を`IsChallengeActive`から`IsMovementConfined`へ変更(この1行のみ。Step 8AのSpin Fix/Push関連コードには触れていない)。SUCCESS中はStart Area Constraintが外れ、Overview Cameraのまま自由に移動できる。Screen-relative MovementはCamera基準で元々Phase分岐が無いため無変更で動作
+
+**Retry**
+- `GameFlowManager.cs`に`RetryRequestRpc()`(`[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]`)と`RetrySequence()`コルーチンを追加。`CurrentPhase == SUCCESS`をServer側で再検証し、`_isRetrying`フラグで二重実行を防止した上で、全Domino Despawn→`ResetRunState()`→`ChallengeTimer.ResetForRetry()`→`SetPhase(BUILDING)`という順で実行
+- `GameplayHUD.cs`を改修。BUILD TIME表示をPhaseに関わらず常時表示するよう変更(旧`RunningTimerPanel`を`BuildTimePanel`へ改名・再利用)。`ResultActionContainer`(画面右下)+`RetryButton`(UnityEngine.UI.Button)を追加し、SUCCESS中のみ表示。Mouse Click(`Button.onClick`)とKeyboard(`R`キー、`wasPressedThisFrame`)の両方に対応
+- `GameplayHUD.prefab`をHeadless Prefab編集(`manage_prefabs`の`modify_contents`)で更新。TMP Essential Resourcesは既にStep 8Bでインポート済みのものを再利用
+
+### 動作確認済み
+
+Play Modeで、以下をすべて実機確認しました(すべて`ChallengeTimer.GetBuildSeconds()`/`GameFlowManager.CurrentPhase`等の実際の値、または本物のInput System経路・UI Click経路で確認)。
+
+- **BUILD TIME Start条件**: Domino未配置の間`HasStarted=False`(HUDは`--:--.--`)であること、Host側のReal Domino Spawn成功の瞬間に`HasStarted=True`となり0から計測開始することを確認
+- **BUILDING/READY中は進行**: READYへ遷移してもBUILD TIMEが停止しないことを確認
+- **RUNNING/FAILED中はPause**: F押下でRUNNINGへ入った直後の値が、その後時間が経過しても一切変化しない(複数回確認)ことを確認。FAILEDへ遷移した後も同様
+- **FAILED→BUILDINGでResume**: Failure Reset完了(BUILDING)後、Pause時の値から継続して増加し始めることを確認(0へリセットされない)
+- **SUCCESSでFinal確定**: SUCCESS遷移時の`FinalBuildSeconds`が、RUNNING開始時にPauseされていた値と完全に一致することを確認
+- **READY新条件**: 「全PlayerがStart Area内+Domino 0個」→BUILDINGのまま、「+倒れたDomino 1個」→BUILDINGのまま、「+Standing Domino 1個」→READY、の3パターンをすべて実機確認。READY中にStanding Dominoを倒す→即座にBUILDINGへ戻ることも確認
+- **Ready Re-arm廃止の確認**: FAILED→BUILDING(Domino Despawn済み、Standing Domino=0)の直後、Playerが一度もStart Areaから退出していない状態のまま新しいDominoを配置し、Exit/Re-enter無しで即座にREADYへ遷移することを確認(旧仕様なら`_readyRearmPending`によりBUILDINGに留まっていたはずの状況)
+- **F→RUNNING(本物のFキー入力)**: `InputSystem.QueueStateEvent`経由の本物のFキー入力で、新しいDefensive Check込みのRUNNING遷移が正常に動作することを確認
+- **SUCCESS Exploration**: SUCCESS中に`IsMovementConfined=False`となること、実際にPlayerをStart Area範囲外(境界から8m以上)へ移動させても引き戻されず静止したままであることを確認。Camera位置が`OverviewCameraPoint`と一致し続けること(Overview維持)、`PlacementController._markerActive`が`False`のまま(Placement不可)であることも確認。スクリーンショットで、BUILD TIME・CLEAR!・Retry Button・Start Area外に立つPlayer・維持されたDomino Chainが同時に表示されることを確認
+- **Retry(Mouse Click)**: `UnityEngine.EventSystems.ExecuteEvents.Execute(..., pointerClickHandler)`による本物のButton Click Event経由で、SUCCESS→BUILDINGへ遷移し、Domino全削除・BUILD TIME完全Reset(`HasStarted=False`)・Camera Third Person復帰(Player近傍へ)を確認
+- **Retry(Rキー)**: 別Attemptで、本物のInput System経由のRキー入力でも同じRetry Flowが成立することを確認(2回とも1回目の入力で成功)
+- **Double Retry防止**: SUCCESS中に`RetryRequestRpc()`を3回連続で呼び出しても、Domino DespawnとState Resetが1回だけ実行され、正しくBUILDINGへ到達することを確認(`_isRetrying`ガード)
+- **Full Retry Loop**: 最初のDomino配置→BUILD TIME開始→READY→本物のF→RUNNING(Pause)→SUCCESS(Final確定)→Retry(Click)→BUILDING(Timer完全Reset)→新しい最初のDomino配置→新しいBUILD TIME開始(0から)→新しいREADY、という一連の流れをクリーンなセッションで確認
+- 上記すべてを通じて、Console Errorは0件(クリーンな最終セッションで確認。検証中一時的に、意図的なReflection経由のメソッド直接呼び出し等に起因する`PlayerLoop internal function called recursively`という無害な警告が出たことがあるが、Project由来のErrorではない)
+- **既存機能回帰**: Placement System・`PlayerPushController.cs`は本Stepを通じて一切変更していない(`git diff --stat`で確認)。Player Rigidbodyの`constraints`(`FreezeRotation`)・`PlayerPushController`の存在も変化がないことを確認
+
+### 未実装/確認できなかった事項
+
+- **Host/Client間でのFinal BUILD TIME一致・Client側からのRetryの直接確認**: いずれも設計上(NetworkVariableの同期保証、Server側でのPhase再検証)は保証されますが、MPPM Client Windowへの自動入力/自動操作という、これまでのStepでも繰り返し確認されてきた制約により、Client側の画面を直接キャプチャしての目視確認・Client側からのRetry Request送信の直接実行は本セッションでは実施できていません。開発者ご自身による実機確認を推奨します
+- 本セッション中も、Unity Editor固有の「PlayModeが理由なく一時停止状態になる」既知Artifactが複数回発生しましたが、発生の都度検出・解除して検証を継続しており、コード自体の問題ではないことを確認しています
+
+### 将来確認が必要な事項
+
+- Retryを`Host-only`に制限するかどうかはStep 9で検討します(現時点ではPrototypeとしてHost/Clientどちらからも要求可能)
+- Result Action Container(現在Retry Buttonのみ)は、将来Next Course/Character Change/Return to Title等を追加しやすい配置を意図していますが、実際に追加する際にレイアウトの再調整が必要になる可能性があります
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

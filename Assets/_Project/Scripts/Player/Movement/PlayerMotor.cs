@@ -183,9 +183,12 @@ namespace Domino.Player
             }
         }
 
+        // Step 8.5: deliberately IsMovementConfined, not IsChallengeActive - SUCCESS keeps the
+        // Overview Camera (which does key off IsChallengeActive) but releases movement so
+        // Players can walk the Stage they built. See GameFlowManager.IsMovementConfined.
         private static bool IsConfinedToStartArea()
         {
-            return GameFlowManager.Instance != null && GameFlowManager.Instance.IsChallengeActive;
+            return GameFlowManager.Instance != null && GameFlowManager.Instance.IsMovementConfined;
         }
 
         // Clamps the horizontal component of targetVelocity so the Player's next FixedUpdate

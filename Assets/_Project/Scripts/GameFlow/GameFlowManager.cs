@@ -51,14 +51,11 @@ namespace Domino.GameFlow
         private List<DominoFallenZone> _orderedZones;
         private int _expectedZoneIndex;
 
-        // Blocks BUILDING->READY after a Failure reset until every currently-connected
-        // Player has left the Start Area at least once (see ReevaluateReady).
-        private bool _readyRearmPending;
-
         private float _settledSince = -1f;
         private float _timeSinceLastFailureCheck;
         private float _timeSinceLastReadyPoll;
         private bool _failureSequenceRunning;
+        private bool _isRetrying;
 
         public GamePhase CurrentPhase => _phase.Value;
         public int CheckpointProgress => _checkpointProgress.Value;
@@ -71,6 +68,13 @@ namespace Domino.GameFlow
         // Phases (Step 7.6) instead of each re-listing RUNNING/SUCCESS/FAILED separately.
         public bool IsChallengeActive =>
             _phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.SUCCESS || _phase.Value == GamePhase.FAILED;
+
+        // Distinct from IsChallengeActive (Step 8.5): the Start Area movement Constraint should
+        // release on SUCCESS so Players can walk the Stage they built, even though the Overview
+        // Camera (which keys off IsChallengeActive) correctly stays put. FAILED keeps the same
+        // confinement it always had - only SUCCESS is excluded here.
+        public bool IsMovementConfined =>
+            _phase.Value == GamePhase.RUNNING || _phase.Value == GamePhase.FAILED;
 
         private void Awake()
         {
@@ -167,6 +171,8 @@ namespace Domino.GameFlow
             ReevaluateReady();
         }
 
+        // READY depends only on the current state (Step 8.5) - no memory of past Failures,
+        // exits, or re-arm history. Re-evaluated from scratch every time this is called.
         private void ReevaluateReady()
         {
             if (!IsServer) return;
@@ -174,13 +180,7 @@ namespace Domino.GameFlow
 
             ReconcilePlayersInStartArea();
 
-            if (_readyRearmPending)
-            {
-                if (_playersInStartArea.Count > 0) return;
-                _readyRearmPending = false;
-            }
-
-            bool allReady = AllConnectedPlayersInStartArea();
+            bool allReady = AllConnectedPlayersInStartArea() && startArea.CountStandingInside() > 0;
 
             if (allReady && _phase.Value == GamePhase.BUILDING)
             {
@@ -232,6 +232,12 @@ namespace Domino.GameFlow
         {
             if (_phase.Value != GamePhase.READY) return;
             if (!AllConnectedPlayersInStartArea()) return;
+
+            // Defensive re-check (Step 8.5): READY should already guarantee this, but never
+            // trust cached/UI-only state for something that would otherwise let RUNNING begin
+            // with no Domino to ever trigger _startTriggered - which would leave RUNNING
+            // unable to ever end (see GameFlow.md "DominoなしRUNNINGを防止する").
+            if (startArea.CountStandingInside() <= 0) return;
 
             BeginRun();
         }
@@ -316,12 +322,50 @@ namespace Domino.GameFlow
             yield return new WaitUntil(() => despawnComplete);
 
             ResetRunState();
-            _readyRearmPending = true;
             _failureSequenceRunning = false;
             SetPhase(GamePhase.BUILDING);
 
-            // In case every Player already left the Start Area while RUNNING/FAILED, clear
-            // the re-arm block immediately instead of waiting for the next Enter/Exit event.
+            // Immediately check whether the new (Step 8.5) READY condition already holds -
+            // e.g. Players never left the Start Area and a Standing Domino already exists -
+            // rather than waiting for the next Enter/Exit event or poll tick.
+            ReevaluateReady();
+        }
+
+        // Step 8.5: Prototype allows either Host or Client to request a Retry (see Step 9
+        // Preparation notes - may become Host-only later). Server independently validates
+        // CurrentPhase == SUCCESS regardless of who asked, so a stray/late request from a
+        // Client is never trusted blindly.
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        public void RetryRequestRpc(RpcParams rpcParams = default)
+        {
+            if (_phase.Value != GamePhase.SUCCESS) return;
+            if (_isRetrying) return;
+
+            _isRetrying = true;
+            StartCoroutine(RetrySequence());
+        }
+
+        private IEnumerator RetrySequence()
+        {
+            bool despawnComplete = false;
+            if (DominoCleanupManager.Instance != null)
+            {
+                DominoCleanupManager.Instance.DespawnAllRegistered(() => despawnComplete = true);
+            }
+            else
+            {
+                despawnComplete = true;
+            }
+            yield return new WaitUntil(() => despawnComplete);
+
+            ResetRunState();
+            if (ChallengeTimer.Instance != null) ChallengeTimer.Instance.ResetForRetry();
+            _isRetrying = false;
+            SetPhase(GamePhase.BUILDING);
+
+            // Same reasoning as FailureResetSequence: check immediately rather than waiting
+            // for the next event/poll tick (though after a Retry, Standing Domino count is
+            // always 0 until Players rebuild, so this will not reach READY yet).
             ReevaluateReady();
         }
 

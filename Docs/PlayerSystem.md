@@ -354,9 +354,9 @@ sequenceDiagram
 
 ---
 
-## 4.5. RUNNING中のPlayer移動制限とOverview Camera(Step 7.6で追加、Step 7.7でMovement Basisを再設計)
+## 4.5. RUNNING中のPlayer移動制限とOverview Camera(Step 7.6で追加、Step 7.7でMovement Basisを再設計、Step 8.5でSUCCESS中の扱いを分離)
 
-RUNNING/SUCCESS/FAILED中(`GameFlowManager.IsChallengeActive == true`)、Playerの移動とカメラの挙動がBUILDING/READY時と変わります。
+RUNNING/SUCCESS/FAILED中(`GameFlowManager.IsChallengeActive == true`)、CameraはOverviewのままになります。Playerの移動範囲(Start Area拘束)はこれとは別の条件(`IsMovementConfined`、RUNNING/FAILEDのみ)で判定しており、Step 8.5でSUCCESS中はConstraintを外すよう変更しました(第9.5章「SUCCESS Exploration」参照、詳細は`GameFlow.md`)。
 
 ### Screen-relative Movement(Step 7.7)
 
@@ -395,7 +395,7 @@ Overview Camera自体を(マウスで)回しても、入力(WASD)が無ければ
 
 ### Start Area拘束(Constraint)
 
-同じ`IsChallengeActive`の間、Playerは`StartAreaZone`のBoxCollider範囲(Position/Rotation/Scaleを反映したLocal空間、`Player Radius Margin`分だけ内側に縮小)から出られなくなります。
+`GameFlowManager.IsMovementConfined`(RUNNING/FAILEDの間、Step 8.5で`IsChallengeActive`から分離)の間、Playerは`StartAreaZone`のBoxCollider範囲(Position/Rotation/Scaleを反映したLocal空間、`Player Radius Margin`分だけ内側に縮小)から出られなくなります。SUCCESS中はこの拘束を受けません(Overview Cameraのままステージを自由に歩けます)。
 
 ```csharp
 // PlayerMotor.ApplyMovement()

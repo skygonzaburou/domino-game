@@ -1,5 +1,6 @@
 using Unity.Netcode;
 using UnityEngine;
+using Domino.GameFlow;
 
 namespace Domino.DominoSystem
 {
@@ -52,6 +53,12 @@ namespace Domino.DominoSystem
             {
                 DominoCleanupManager.Instance.Register(spawned);
             }
+
+            // Step 8.5: BUILD TIME starts on the first successful Real Domino Network Spawn -
+            // deliberately here (not PlacementController, which is Frozen) and deliberately
+            // after Spawn succeeds, not on the RPC request itself (Marker/Ghost/E/Left-Click/
+            // an RPC that fails Validation must never start the clock).
+            ChallengeTimer.Instance?.NotifyDominoPlaced();
 
             return true;
         }
