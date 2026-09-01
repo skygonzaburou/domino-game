@@ -155,6 +155,9 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | [StartAreaZone.cs](../Assets/_Project/Scripts/GameFlow/StartAreaZone.cs) | `Domino.GameFlow.StartAreaZone` | `DominoFallenZone` | Step 6で追加。Start Domino判定に加え、Player Ready判定(全員がStart Areaに入ったか)を行う。Step 7.6で`ClampToLocalBounds()`を追加(`PlayerMotor`のStart Area拘束が利用するLocal空間クランプ)。Step 7.7で`ContainsWorldPoint()`を追加(`GameFlowManager`のReady Re-arm自己修復が利用するGround Truth判定) |
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Step 6で追加。Checkpoint判定と、明示的な通過順序(`CheckpointIndex`)を持つ |
 | [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Step 6で追加。Goal判定を行う |
+| [PlayerPushController.cs](../Assets/_Project/Scripts/Player/Movement/PlayerPushController.cs) | `Domino.Player.PlayerPushController` | `NetworkBehaviour` | Step 8Aで追加。Player同士の衝突を検出し、Server-validatedなRPCでPlayer-vs-Player Pushを実現する |
+| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加。`GameFlowManager.CurrentPhase`を外側からPollingし、RUNNING開始時刻とFinal Timeのみを1回ずつ同期するHost Authoritativeなタイマー |
+| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。`GameFlowManager`/`ChallengeTimer`の状態をLocalで読み取り、Phase別のCanvas UIを表示するだけの純粋な表示コンポーネント(NetworkObjectではない) |
 
 各スクリプトのField/Methodの詳細は `PlayerSystem.md`(PlayerMotor / PlayerStats / ThirdPersonCamera / PlacementController / PlacementMarker / GhostDomino)、`Networking.md`(NetworkBootstrap / DominoSpawner)、`GameFlow.md`(GameFlowManager / 各Zone / ChallengeInput)にまとめています。
 
@@ -245,6 +248,23 @@ GhostDominoと同じく、Collider・Rigidbody・NetworkObjectを一切持たな
 ```
 
 RootのCollider(判定用、見えない)と、Visual子オブジェクトの薄いパッド(見た目用)を分離しているのは、Player.prefabの Root(物理・ネットワーク) / Visual(見た目) という分離パターンを踏襲したものです。CheckpointのみRootに`Checkpoint Index`フィールドを持ちます。いずれも`NetworkObject`を持たない、Host/Client共通のScene静的オブジェクトです(判定処理自体はHost側だけが行います。詳細はGameFlow.mdを参照)。
+
+`GameplayHUD.prefab`(`Assets/_Project/Prefabs/GameplayHUD.prefab`、Step 8Bで追加)の階層構造:
+
+```
+GameplayHUD (Root)
+├─ Canvas / CanvasScaler / GraphicRaycaster   (Screen Space - Overlay)
+├─ GameplayHUD (表示ロジック本体、MonoBehaviour)
+├─ BuildingPanel      (TextMeshProUGUI, 単体で"BUILDING"を表示)
+├─ ReadyPanel         (TextMeshProUGUI, 単体で"READY / Press F to Start"を表示)
+├─ RunningTimerPanel  (TextMeshProUGUI, GameplayHUD.csが毎Frame現在Elapsed Timeを書き込む)
+├─ FailedPanel        (TextMeshProUGUI, 単体で"FAILED"を表示)
+└─ ResultPanel
+    ├─ ResultLabelText   (TextMeshProUGUI, 静的な"CLEAR!\nTIME")
+    └─ ResultTimeText    (TextMeshProUGUI, GameplayHUD.csがSUCCESS確定時のFinal Timeを書き込む)
+```
+
+`NetworkObject`を一切持たないPure LocalなGameObjectで、Host/Client双方のSceneに同じPrefabがそのまま存在し、各自が自分のLocalな`GameFlowManager.CurrentPhase`/`ChallengeTimer`の読み取り結果だけで表示を切り替えます(詳細はGameFlow.md「Challenge Timer / Gameplay HUD」章を参照)。
 
 ---
 

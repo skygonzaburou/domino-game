@@ -462,5 +462,7 @@ private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
 | [CheckpointZone.cs](../Assets/_Project/Scripts/GameFlow/CheckpointZone.cs) | `Domino.GameFlow.CheckpointZone` | `DominoFallenZone` | Checkpoint判定 + 通過順序(`CheckpointIndex`) |
 | [GoalAreaZone.cs](../Assets/_Project/Scripts/GameFlow/GoalAreaZone.cs) | `Domino.GameFlow.GoalAreaZone` | `DominoFallenZone` | Goal判定 |
 | [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | `F`キー押下をHostへのRPC呼び出しに変換する |
+| [ChallengeTimer.cs](../Assets/_Project/Scripts/GameFlow/ChallengeTimer.cs) | `Domino.GameFlow.ChallengeTimer` | `NetworkBehaviour` | Step 8Bで追加。RUNNING開始からSUCCESSまでのTime Attack計測(詳細は`ChallengeTimer.md`) |
+| [GameplayHUD.cs](../Assets/_Project/Scripts/UI/GameplayHUD.cs) | `Domino.UI.GameplayHUD` | `MonoBehaviour` | Step 8Bで追加。Phase別のCanvas UI表示(BUILDING/READY/RUNNING Timer/FAILED/SUCCESS Result) |
 
-Zone自体(`NetworkObject`を持たない)はStage(Scene)側に配置するPrefabで、Stage Authoringの詳細は`StageAuthoring.md`を参照してください。
+Zone自体(`NetworkObject`を持たない)はStage(Scene)側に配置するPrefabで、Stage Authoringの詳細は`StageAuthoring.md`を参照してください。Time Attack計測(`ChallengeTimer`)とGameplay HUD(`GameplayHUD`)の詳細は`ChallengeTimer.md`を参照してください。

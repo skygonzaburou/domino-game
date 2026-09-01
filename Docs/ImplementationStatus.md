@@ -634,6 +634,36 @@ Play Modeで、Phase遷移の直接操作とgenuine Input System入力、およ�
 
 ---
 
+## Step 8B: Challenge Timer / Result
+
+### 実装済み
+
+- `ChallengeTimer.cs`(新規、`GameFlowManager` GameObjectへ追加)を作成。`GameFlowManager.CurrentPhase`を外側からPolling(Server限定`Update()`、Edge検出)し、`GameFlowManager.cs`自体には一切変更を加えていない
+- `RunStartServerTime`(`NetworkVariable<double>`、RUNNING開始時に`NetworkManager.ServerTime.Time`を1回だけ書き込み)、`FinalElapsedSeconds`(同、SUCCESS確定時に1回だけ書き込み)の2つのみをNetwork同期。毎Frameの経過時間表示はHost/Client双方が完全にLocalで計算(`GetElapsedSeconds()`)し、Per-frameのNetwork通信は一切発生しない
+- FAILED中はTimerを更新も確定もしない(`HasFinalTime`が`false`のまま)ため、そのAttemptがClear Timeとして扱われることはない。FAILED→BUILDING(Failure Reset完了)で`RunStartServerTime`/`FinalElapsedSeconds`を両方Resetし、次Attemptは必ず0から開始
+- `GameplayHUD.cs`(新規、`Domino.UI`名前空間、`GameplayHUD.prefab`化)を作成。BUILDING/READY/RUNNING(Timer表示)/FAILED/SUCCESS(CLEAR!+Final Time)の5Panelを、`GameFlowManager.CurrentPhase`に応じて排他的に表示切り替え。UGUI(Canvas, Screen Space - Overlay) + TextMeshProを使用。`NetworkObject`を持たないPure LocalなComponentで、NetworkBootstrap/MPPM/Host起動処理とは一切結合していない
+- プロジェクトにTMP Essential Resources(フォントアセット)が未導入だったため、`TMP Essential Resources.unitypackage`(`com.unity.ugui`パッケージ同梱)をインポートし、`LiberationSans SDF`を全Textへ割り当てた
+
+### 動作確認済み
+
+- Play Modeで、READY→(正規の`BeginRun()`経由で)RUNNING→Timer開始、SUCCESS→Timer停止・Final Time確定、という一連の流れをHost側で確認。Timer表示が`MM:SS.xx`形式(例: `01:52.84`、`02:14.31`)で正しくフォーマットされることをスクリーンショットで確認
+- HUDの5Panelがそれぞれ正しいPhaseでのみ表示されることをスクリーンショットで確認(BUILDING→`BUILDING`、READY→`READY / Press F to Start`、RUNNING→現在Timer、SUCCESS→`CLEAR!` + `TIME` + Final Time)
+- FAILED→BUILDING(Failure Reset)後、`RunStartServerTime`/`FinalElapsedSeconds`が両方Resetされ、次のRUNNINGで`GetElapsedSeconds()`が`0.000`から再スタートすることを確認(2回目Attemptの時間が1回目から持ち越されない)
+- 検証全体を通じてConsole Errorは0件(1件、手動で`ChallengeTimer.Update()`をReflection経由で直接呼び出した際にのみ発生した`PlayerLoop internal function called recursively`という警告があったが、これはReflectionでUnityのライフサイクルメソッドを直接呼び出したこと自体が原因の一時的なArtifactであり、正規の経路(Unity自身のUpdate()呼び出し)だけを使ったクリーンな再テストではConsole Errorは一切発生しないことを確認済み)
+- 既存機能回帰: Placement System(`git diff --stat`が空であることを確認)、Ready Re-arm、Console上の`[GameFlowManager] Phase -> ...`ログが引き続き正常に出力されることを確認
+
+### 未実装/確認できなかった事項
+
+- **Host/Client間でのFinal Time一致の直接確認**: `FinalElapsedSeconds`は`NetworkVariableReadPermission.Everyone`の`NetworkVariable`のため、設計上Host/Client双方が同一の値を読む(NGOの標準的な同期保証)ことは確実ですが、MPPM Client側のウィンドウを直接キャプチャしての目視確認までは、Step 7.8.1/Step 8Aで既出のClient Window自動化の制約により実施できていません。開発者ご自身による実機確認を推奨します
+- 本セッション中、Unity Editor固有の「PlayModeが理由なく一時停止状態(`EditorApplication.isPaused`)になる」という、このProjectで以前から記録済みの既知Artifactが複数回発生しました。発生の都度検出・解除して検証を継続しており、コード自体の問題ではないことを確認しています
+
+### 将来確認が必要な事項
+
+- HUDのレイアウト(Panel位置・フォントサイズ・色)はプロトタイプとしての仮の値です。実際のプレイ画面で見やすいかどうか、開発者ご自身での確認を推奨します
+- 2人以上でのRUNNING中、Overview Cameraの見下ろし視点においてRunning Timer PanelがDomino Chainの視認性を妨げないか、実プレイでの確認を推奨します
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
