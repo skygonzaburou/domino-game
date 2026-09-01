@@ -1,0 +1,23 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f6ed81aa1fd425448991e63914f26a1b, type: 3}
+  m_Name: StageCatalog
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.Menu.StageCatalog
+  stages:
+  - {fileID: 11400000, guid: b9e4661cb91e8d344bbae87b9cfe0cf0, type: 2}
+  - {fileID: 11400000, guid: aa2543decedc06540ba3dcaed96a4f6d, type: 2}
+  - {fileID: 11400000, guid: 4c15d279e439018409ce93bb94944eac, type: 2}
+  - {fileID: 11400000, guid: 734a42c0cf1280e4c85c259fb1d46804, type: 2}
+  - {fileID: 11400000, guid: e1a50432e7739f94283e409450293dab, type: 2}
+  - {fileID: 11400000, guid: f6e14d41fd3b89d4f98a5e0f8606a6b1, type: 2}
+  - {fileID: 11400000, guid: 80361e541071d5b47903d971db6226ee, type: 2}
+  - {fileID: 11400000, guid: 8c9bcbf1c01658e4c93a2d063b61374f, type: 2}

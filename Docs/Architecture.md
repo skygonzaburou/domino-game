@@ -56,7 +56,9 @@ Assets/
 │     ├─ DominoPhysicsMaterial.physicMaterial
 │     └─ GroundPhysicsMaterial.physicMaterial
 ├─ Scenes/
-│  └─ SampleScene.unity           … Build Settingsに登録されている唯一のScene
+│  └─ SampleScene.unity           … Gameplay Scene(Build Index 1)
+├─ _Project/Scenes/
+│  └─ MainMenu.unity              … Menu/Session Scene(Step 9、Build Index 0)。NetworkManagerはここに常駐
 ├─ Settings/                      … URPテンプレート標準(Renderer / VolumeProfile等)
 ├─ TutorialInfo/                  … Unityテンプレート標準のReadme(未使用)
 ├─ InputSystem_Actions.inputactions … テンプレート標準のInput Actionアセット(現状未使用。入力は後述の通りKeyboard/Mouseを直接ポーリング)
@@ -90,16 +92,21 @@ Assets/
 
 ## 3. Scene構成
 
-Scene は `Assets/Scenes/SampleScene.unity` の1つだけで、Build Settingsにもこれ1つだけが登録されています。
+Step 9より、Scene は `MainMenu.unity`(Build Index 0)と `SampleScene.unity`(Build Index 1、Gameplay Scene)の2つで構成されています。起動時は必ずMainMenuから始まり(TITLE→MODE SELECT→…)、Player操作またはDevelopment Auto-start(MPPM Tag/CLI引数)経由でGameplay Sceneへ`NetworkManager.SceneManager.LoadScene(..., LoadSceneMode.Single)`により遷移します。詳細は`MenuFlow.md`を参照してください。
 
-Scene内のRoot GameObjectは次の8つです。
+### MainMenu.unity(Step 9)
+
+`Main Camera`(UI描画用の単純なCamera)・`EventSystem`(`InputSystemUIInputModule`)・`Canvas`(`MainMenuController`、TitlePanel等7Panel)に加え、**`NetworkManager`(`NetworkManager`/`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)がこのSceneに常駐**しています(Step 9より前はSampleScene側にありました)。`NetworkBootstrap.Awake()`で明示的に`DontDestroyOnLoad`されるため、Gameplay SceneへのScene遷移(`LoadSceneMode.Single`)を跨いでも同一インスタンスが生き続け、SampleScene側にNetworkManagerが重複生成されることはありません。`GameFlowManager`/`Domino`/`Player`等のGameplay Objectはこちらには一切配置されていません。
+
+### SampleScene.unity(Gameplay Scene)
+
+Root GameObjectは次の7つです(Step 9で`NetworkManager`がMainMenu側へ移動したため、Step 8.6時点の8つから1つ減っています)。
 
 | GameObject | 主なComponent | 役割 |
 |---|---|---|
 | **Main Camera** | Camera, AudioListener, `ThirdPersonCamera` | 三人称カメラ本体。Scene起動時から常に存在する |
 | **Ground** | MeshFilter/MeshRenderer(Plane), MeshCollider | 30m×30mの床(Planeプリミティブをscale(3,1,3)で拡大)。MeshColliderには`GroundPhysicsMaterial`を設定 |
 | **Directional Light** | Light | Universal 3Dテンプレート標準のライト |
-| **NetworkManager** | `NetworkManager`, `UnityTransport`, `NetworkBootstrap`, `DominoSpawner`, `DominoCleanupManager`(Step 7) | オンライン通信の起点となるオブジェクト |
 | **Global Volume** | Volume | URPのポストプロセス設定(テンプレート標準) |
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
 | **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |

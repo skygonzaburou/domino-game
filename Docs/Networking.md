@@ -419,3 +419,9 @@ sequenceDiagram
 - **二重実行防止**: `_isRetrying`フラグ(Server側のみが読み書き)により、複数Playerからほぼ同時にRequestが来ても、Domino DespawnとState Resetが複数回走ることはありません
 
 詳細な設計判断は`GameFlow.md`「9.6. Retry」を参照してください。
+
+---
+
+## 23. NetworkManagerのScene常駐先(Step 9)
+
+Step 9より、`NetworkManager`(および同居する`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)は、Gameplay Scene(`SampleScene.unity`)ではなく`MainMenu.unity`に常駐しています。`NetworkBootstrap.Awake()`の明示的な`DontDestroyOnLoad`により、`NetworkManager.SceneManager.LoadScene(..., LoadSceneMode.Single)`によるMenu→Gameplayの遷移を跨いでも同一インスタンスが生き続けます。本章より上のRPC/Authority/Timer Authority等の説明は「NetworkManagerがどのSceneにいるか」に依存しない内容のため変更していません。Scene構成そのものの詳細は`Architecture.md`「3. Scene構成」、Menu側のFlow詳細は`MenuFlow.md`を参照してください。

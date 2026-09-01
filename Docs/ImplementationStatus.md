@@ -793,6 +793,72 @@ Debug LogとRuntime直接読み取り(Rigidbody速度・Tilt Angle・Registry内
 
 ---
 
+## Step 9A: Main Menu / Stage Select / Single Player
+
+Step 9は「Gameplayそのもの」ではなく「PlayerがGameplayへ入るまでのFlow」を作るStepです。9Aでは、TITLE→MODE SELECT→TIME ATTACK(Single Player)→STAGE SELECT→GAMEPLAYの経路を実装しました。既存のGameplay System(Placement/BUILD TIME/READY/RUNNING/Strict Clear/Failure Detection/Fallen-only Cleanup/SUCCESS/Retry/Player Push/Spin Fix)には一切変更を加えていません(`git diff --stat`で確認)。詳細な設計は`Docs/MenuFlow.md`を参照してください。
+
+### 実装済み
+
+**Main Menu Scene**
+- `Assets/_Project/Scenes/MainMenu.unity`(新規)を作成し、Build Settingsの先頭(Index 0)に登録。Gameplay Sceneは既存の`Assets/Scenes/SampleScene.unity`をそのまま使用(Index 1)し、Single Player/Online用に別Gameplay Sceneを新設していません
+- MainMenu Sceneは`GameFlowManager`/`Domino`/`Player`等のGameplay Objectを一切持たず、`Main Camera`・`EventSystem`(`InputSystemUIInputModule`、Active Input Handlingが`Input System Package`のみのプロジェクトのため)・`Canvas`(Screen Space - Overlay, CanvasScaler 1920x1080 Scale With Screen Size、GameplayHUDと同じ設定)・移動してきた`NetworkManager`のみで構成
+
+**Menu Architecture**
+- `MenuState.cs`(enum: Title/ModeSelect/OnlineSelect/OnlineCreate/OnlineJoin/OnlineRoom/StageSelect)
+- `MainMenuController.cs`(Canvasにアタッチ): 7つのPanelをDictionaryで管理し、`ShowState()`で排他的に表示切り替え。`Stack<MenuState>`による簡易Back履歴、Escapeキー(`Keyboard.current.escapeKey`)とPanelごとのBackボタン両方から`OnBackClicked()`を呼び出し
+- `StageSelectController.cs`(StageSelectPanelにアタッチ): Stage Data/Networkingを扱う。`MainMenuController`はPanel切り替えのみを担当し、Stage DataやNetwork処理を一切知らない責務分離構成(1つの巨大な`MenuManager.cs`にしていません)
+- Canvas階層: `TitlePanel`/`ModeSelectPanel`/`OnlineSelectPanel`/`OnlineCreatePanel`/`OnlineJoinPanel`/`OnlineRoomPanel`/`StageSelectPanel`の7Panel。Online系4Panelは9Aでは「(Step 9B)」のプレースホルダ表示のみ(Create/Join/Roomボタン自体はOnlineSelectPanelに実装済みで、Panel間遷移は機能する)
+
+**TITLE / MODE SELECT**
+- TitlePanel: 「DOMINO」+ STARTボタン。ModeSelectPanel: 「SELECT MODE」+ TIME ATTACK/ONLINE PLAYボタン+ BACKボタン
+
+**Single Player(Local Host)Architecture**
+- 既存GameplayがNGO/NetworkBehaviour前提であるため、Single Player専用の非Network実装は作らず、「Local Host 1人」としてGameplayを開始する方式を採用(`StageSelectController.StartLocalHostAndLoadGameplay()`): `NetworkManager.Singleton.StartHost()`(Relay不使用)→ `NetworkManager.Singleton.SceneManager.LoadScene(sceneName, LoadSceneMode.Single)`。既存GameFlowがConnected Players = 1でもそのまま動作することを利用しており、Single Player専用のGameplayロジック分岐は追加していません
+- `StartHost()`が失敗した場合(検証環境で実際にPort競合により発生を確認)、`SceneManager.LoadScene()`を呼ばずにエラーログを出して中断するガードを追加。当初この分岐が無く、StartHost失敗後もSceneManager.LoadScene()を無条件で呼んでいたため、Networking未起動状態でのScene操作という未定義動作を引き起こし、StageSelectPanelのGrid Cardが消失する実害のあるバグとして実機で発見・修正しました
+
+**Stage Catalog**
+- `StageDefinition.cs`(ScriptableObject: Stage ID/Display Name/Gameplay Scene Name)・`StageCatalog.cs`(ScriptableObject: StageDefinitionのList)を新規作成
+- `Assets/_Project/Data/Stages/Stage_01.asset`〜`Stage_08.asset`(Stage ID 1〜8、Display Name "STAGE 1"〜"STAGE 8"、Gameplay Scene Name はすべて`"SampleScene"`)、および`Assets/_Project/Data/StageCatalog.asset`(8つのStageDefinitionを参照)を作成
+- `StageSelectController`は8回ハードコードする代わりに、Panel内の非表示`StageCardTemplate`(Button + TextMeshProUGUI)を`catalog.Stages`の数だけ`Instantiate`してGridLayoutGroup(4列×2段、`GridLayoutGroup.Constraint.FixedColumnCount`)へ追加する、データ駆動の構成
+- 将来Stage 2以降に別のGameplay Sceneを割り当てる場合、対応する`StageDefinition`アセットの`gameplaySceneName`を変更するだけでよく、コード変更は不要なArchitecture
+
+**NetworkManager Lifecycle(Menu ⇄ Gameplay永続化)**
+- 既存の「NetworkManager」GameObject(`NetworkManager`/`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)をSampleSceneからMainMenu Sceneへ移動(`move_to_scene`)。SampleScene側には以後`NetworkManager`を一切配置していません(Duplicate NetworkManager防止)
+- `NetworkBootstrap.Awake()`に明示的な`DontDestroyOnLoad(gameObject)`を追加(NetworkManager自体も内部的に同様の処理を行いますが、それに暗黙的に依存せず明示化)。`LoadSceneMode.Single`によるScene遷移時、MainMenu Sceneの`Canvas`等は正しく破棄され、NetworkManager側のみ生き残ることを実機で確認
+- `GameFlowManager`(Scene-placed NetworkObject、Zone参照を持つ)はGameplay固有のためSampleScene側に残置
+
+**NetworkBootstrap(Development Auto-start Modeの分離)**
+- 既存のMPPM Tag(`Host`/`Client`)・CLI引数(`-host`/`-client`)によるDevelopment Auto-startのロジックは削除せず維持。Hostとして起動した場合のみ、直後に`NetworkManager.Singleton.SceneManager.LoadScene(developmentGameplaySceneName, LoadSceneMode.Single)`(既定値"SampleScene"、Inspector調整可能)を呼ぶよう追加し、開発テスト時に毎回手動でMenu操作する必要がないようにしました
+- MPPM Tag/CLI引数のいずれも無い通常起動時はこの経路が早期returnし、MainMenuのTITLE画面が通常通り表示される、Interactive Menu ModeとDevelopment Auto-start Modeの分離を確認
+
+**GameSessionContext**
+- `GameSessionContext.cs`(通常のstatic class、MonoBehaviourではない): `SelectedStageId`・`IsOnline`を保持。Sceneをまたいでも静的フィールドは保持され続けるため、DontDestroyOnLoad等の仕組みを追加で用意する必要がありませんでした
+
+### 動作確認済み
+
+MPPM Tag(Main EditorへHost Tagが付与されているため、通常のPlay Mode開始が即座にDevelopment Auto-startでGameplayへ入ってしまう)の影響を避けるため、検証中は`NetworkBootstrap`コンポーネントを一時的にInspector上でDisableした状態でPlay Modeに入り、Menu Flow自体を実機確認しました(検証専用の一時措置で、コード自体は変更していません)。
+
+- **TITLE表示**: Play Mode開始直後、「DOMINO」+ STARTボタンが正しく表示されることをスクリーンショットで確認。7Panel中TitlePanelのみがactiveであることを確認(初期実装時、7Panel全てが同時にactiveになっており、最後のPanelが画面全体を覆ってTitlePanelが見えなくなるバグを発見・修正済み)
+- **本物のClick経路**: `UnityEngine.EventSystems.ExecuteEvents.Execute(button, pointerData, ExecuteEvents.pointerClickHandler)`(Step 8.5のRetry Buttonと同じ検証手法)経由で、START→TIME ATTACK→Stage 3クリックまでの一連の操作が実際のButton Click Eventとして正しく処理されることを確認。本プロジェクトで初めて`EventSystem`/`InputSystemUIInputModule`を追加したため、これが本Stepで初めて機能するUI Click経路になります
+- **ModeSelect表示**: 「SELECT MODE」+ TIME ATTACK/ONLINE PLAYボタンが正しい間隔で(重ならずに)表示されることを確認。初期実装ではY軸のAnchor差分が不足しており2ボタンが視覚的に重なって表示されるバグを発見・修正済み
+- **Stage Grid(4×2)**: `StageCatalog`から8枚のCard("STAGE 1"〜"STAGE 8")が動的生成され、指定通り4列×2段で正しく配置・全て画面内に収まって表示されることを確認。初期実装では`GridLayoutGroup.Constraint`に`FixedRowCount`(値2)を誤って設定しており2列×4段になっていたバグ、および Cell/Container サイズがCanvas幅を超えて左右にはみ出るバグの2つを発見・修正済み
+- **Single Player Start(Stage 3選択)**: Stage 3のCardクリックにより、`GameSessionContext.SelectedStageId = 3`が設定され、`NetworkManager.StartHost()`→`SceneManager.LoadScene("SampleScene", Single)`が実行され、実際にSampleSceneへ遷移することを確認(`SceneManager.GetActiveScene().name == "SampleScene"`)
+- **Gameplay Regression(Single Player)**: Menu経由でSampleSceneに入った後、Player 1人がSpawnされていること、`DominoSpawner.TryPlaceDomino()`によるDomino配置が成功すること、`ChallengeTimer.HasStarted`がDomino配置直後に`true`になりBUILD TIMEが実際にカウントアップすること(`00:00.02`等)をスクリーンショットと直接の値確認の両方で確認。Placement/BUILD TIME/GameFlowの各コンポーネントがNetworkManagerのScene移動後も正しく解決・連携することを確認
+- **StartHost失敗時の安全な中断**: 検証環境で実際にPort競合(同一プロセス内での前回Play SessionのUDP Socketが解放されず`Address already in use`)が発生し、修正前のコードでは失敗後も`SceneManager.LoadScene()`が実行されてStageSelectPanelのGrid Cardが消失する実害を確認。修正後は`StartHost()`失敗時に即座にエラーログを出して中断し、Grid Cardの消失が再発しないことを確認
+- Console: 本Step実装コード由来のError/Warningは最終確認時点で0件
+
+### 未実装/確認できなかった事項
+
+- **MPPM Virtual Player側でのTITLE〜STAGE SELECT操作の直接確認**: これまでのStepと同じ制約(MPPM仮想Playerウィンドウへの自動キーボード入力送信不可)により、Client側の実機操作は確認できていません。ただしMenu側のUIはOwner概念を持たないローカルUIであり、Development Auto-startのTagがMain Editor側にのみ設定されているため、この制約自体はStep 9Aの検証に実害はありませんでした
+- Online系4Panel(OnlineSelect/OnlineCreate/OnlineJoin/OnlineRoom)は、Panel遷移(Back込み)のみ確認済みで、実際のNetworking機能はStep 9Bで実装します
+
+### 将来確認が必要な事項
+
+- **NetworkTransportのUDP Socketが同一プロセス内で解放されないまま残ることがある**(今回の検証で複数回発生): Play ModeをStopしてもUDP Socketが即座には解放されず、次のStartHost()が`Address already in use`で失敗するケースを確認しました。原因はUnity Transport側のネイティブSocket解放タイミングに起因すると考えられ、本Stepのコード自体のバグではありませんが、開発中に同様の現象が起きた場合はUnity Editorの再起動が必要になる可能性があります
+- Stage 2〜8に実際に異なるGameplay Sceneを割り当てる作業は将来のStepの対象です
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
