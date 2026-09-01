@@ -724,6 +724,75 @@ Play Modeで、以下をすべて実機確認しました(すべて`ChallengeTim
 
 ---
 
+## Step 8.6: Failure Detection Stability / Partial Failure Cleanup
+
+Step 8.6では2点のみを対象としました。(1)RUNNING中、Chainがまだ明らかに進行しているのにFAILEDになる「False FAILED」のRoot Cause特定と修正、(2)FAILED後のCleanupを「登録済み全Domino削除」から「倒れたDominoのみ削除、Standing Dominoは維持」へ変更。Placement System・BUILD TIME(第8.5章の意味論自体)・READY条件・SUCCESS Exploration・Retry・Player Physics/Pushには一切変更を加えていません(`git diff --stat`で確認)。
+
+### Root Cause(実機調査で確認した事実)
+
+Debug LogとRuntime直接読み取り(Rigidbody速度・Tilt Angle・Registry内容)による実際のPlay Mode調査の結果、単一の原因ではなく、以下4点がいずれも実際に再現するFalse FAILEDの原因になり得ることを確認しました。
+
+1. **Velocity閾値だけでは遅い動きを見逃す**: あるDominoが`Tilt Angle=89.8°`まで倒れかけている最中、`linearVelocity=0.0015`(閾値0.02未満)・`angularVelocity=0.0375`(閾値0.05未満)という、明らかにまだ動いている途中の瞬間を直接観測しました。旧`AnyTrackedDominoActive()`はVelocityのみで判定していたため、この瞬間は「非Active」と誤判定されうる状態でした
+2. **Stage-authored DominoがRegistryに存在しない**: `DominoSpawner`経由でPlayerが配置したDomino以外(Scene上に直接配置されたDomino)は、旧`DominoCleanupManager`の追跡リストに一切含まれておらず、Activity検知の対象外でした。現在の実プレイ経路(Playerが全て配置する)ではこの経路は直接の原因ではありませんでしたが、一般的な正しさとして修正しました
+3. **Fresh Fallen EventがFailure Timerをリセットしていなかった**: `OnZoneFallen()`でCheckpoint/Goal進行が認められた瞬間でも、Chain Stop Failure Monitor側の「最後に活動を検知した時刻」が更新されない実装になっており、Progress自体は正しく進んでいるのにFailure Timerだけが古い基準で進み続けるケースがありました
+4. **副次的に発見: Physics Explosion(暴走Domino)によるActivity検知の永久汚染**: Playerが近接した間隔(約0.4〜0.45m、Domino幅約0.35mに近い)で連続配置すると、Rigidbody同士のOverlapをPhysics Solverが解消しようとして、最大で約190〜196 m/sの速度で1個のDominoが吹き飛び、Ground Colliderを貫通してY=-9853やY=-24093まで落下し続ける現象を2回直接観測しました。このDominoは`IsSpawned=true`のままRegistryに残り続けるため、速度・角度いずれの判定にも異常値として混入し、以後のActivity判定を恒久的に汚染する経路になり得ることを確認しました
+
+これらのうち、実際にどれがユーザー様の観測した具体的な発生ケースかは1つに断定できませんでしたが(調査時点でChain経路上のReal DominoはすべてPlayer配置のものであり、原因2は今回のケースの直接原因ではなさそうでした)、1・3・4はいずれも実機で再現を確認した実在のバグであり、「単純にSettle Durationを伸ばすだけ」ではこれらのうち1つも解決しないため、それぞれ個別に対処しました。
+
+### New Failure Detection(Meaningful Activity)
+
+- `DominoCleanupManager.AnyTrackedDominoActive()`を`HasMeaningfulActivity(linearVelocityThreshold, angularVelocityThreshold)`へ置き換え。判定条件を「Velocity閾値超過」**OR**「前回Poll時からのTilt Angle変化が`meaningfulTiltDelta`(既定2°)を超過」のいずれかに拡張(対策1)。Tilt Angleは絶対角度ではなく**変化量**で見るため、傾いたまま静止しているDominoは変化が無くなれば正しく非Activeと判定され、最終的にFAILEDになります(恒久的に傾いているだけでActive扱いされ続けることはありません)
+- 新設した`_sceneAuthored`リストで、Scene起動時に一度だけ(Server限定`Update()`初回Tickのみ、以後は毎フレーム検索しない)`FindGameObjectsWithTag("Domino")`を実行し、`DominoSpawner`経由で登録されていないDominoをActivity検知専用リストへ追加(対策2)。このリストはいかなるDespawn経路(BUILDING Cleanup/FAILED/Retry)にも使われず、Stage-authoredの永続オブジェクトとして扱います
+- `GameFlowManager.OnZoneFallen()`の順序検証通過直後に`_settledSince = -1f`を追加し、正当なFresh Fallen Event(Checkpoint通過含む)がFailure Monitorの静止タイマーを必ずリセットするようにしました(対策3)
+- `DominoCleanupManager`に`outOfBoundsY`(既定-10)を追加。毎回のPoll(`checkInterval`, 既定0.2秒)で、Y座標がこの値を下回ったDominoを即座に(Phase・Fallen判定に関わらず)Despawnし、Registryから除去(対策4、Physics Explosion由来の暴走Dominoに対する安全網)
+- Poll間隔ベースの判定を維持しており(既存の`checkInterval`をそのまま使用)、毎フレームのScene全体検索やPer-frame RPCは追加していません
+
+### Fallen-only Cleanup(FAILED後の部分削除)
+
+- `DominoCleanupManager`に、既存の`_tracked`リストと`fallenAngleThreshold`(既存の単一設定、新規追加なし)を共有する形で、`DespawnAllRegistered(Action)`(Retry用、既存動作のまま全削除)と新設`DespawnFallenRegistered(Action)`(FAILED用、`Vector3.Angle(transform.up, Vector3.up) >= fallenAngleThreshold`のもののみ削除)を、共通の`DespawnRoutine(list, allowStanding, onComplete)`コルーチン(既存のBatch Despawnパターン、`despawnBatchSize`ごとに1Frame空ける、Transport Queue設定は無変更)経由で実装
+- `GameFlowManager.FailureResetSequence()`が`DespawnAllRegistered`から`DespawnFallenRegistered`へ変更。`RetrySequence()`は`DespawnAllRegistered`のまま無変更(2つのDespawn経路は完全に独立したAPIとして分離)
+- Fallen-only削除後、`ResetRunState()`(→各Zoneの`OnRunStart()`)は削除完了後に実行されるため、生き残ったStanding Dominoは実行時点で「倒れていない」状態であり、除外リストへは一切入りません。次のAttemptでStanding Dominoに対するFresh Fallen Eventは追加のコード変更なしに正しく動作します
+
+### Failure Recovery Test(実機確認)
+
+- **False FAILED再現テストの再確認**: 遅い倒れかけ(Tilt変化のみでVelocity閾値未満)のケースで、`HasMeaningfulActivity`がTilt Delta判定によりActive=trueを返し続け、FAILEDにならないことを確認
+- **Real Stop**: 完全に静止したChain(Velocity・Tilt変化とも無し)が、`checkInterval`×設定回数分のPollを経て正しくFAILEDになることを確認(Settle Duration自体は変更していません)
+- **Leaning Stop**: 傾いたまま(例: 30°)静止させたDominoが、Tilt変化が止まった後は正しくFAILEDになる(永久にActive扱いされない)ことを確認
+- **Fresh Fallen Event経由のTimerリセット**: Checkpoint通過の瞬間に`_settledSince`が`-1`にリセットされることを直接確認
+- **Out-of-Bounds安全網**: Physics Explosionを意図的に再現(近接配置)し、暴走Dominoが`outOfBoundsY`を下回った直後にDespawn・Registry除去されること、以後のActivity判定が汚染されないことを確認
+- **Fallen-only Despawn**: 10個配置(4個Fallen/6個Standing相当の構成)でFailureさせ、Fallen判定を満たすもののみが削除され、Standing Dominoが画面上・Registry上ともに残ることをHost側で確認
+- **Standing Domino再利用**: Fallen-only削除後、残ったStanding Dominoを含む形で不足分を再配置し、2回目のREADY→RUNNING→SUCCESSまで到達することを、Fail→Rebuild→Successのサイクルを2回繰り返して確認。Standing Dominoの過去のFallen Event/Progress状態が残って次のAttemptを阻害することはありませんでした
+- **BUILD TIME Resume確認**: Fallen-only Cleanup後もBUILD TIMEが0にリセットされず、Pause前の値からResumeすることを、複数回のFailureを跨いで確認
+- **READY即時再遷移**: Failure後、Standing DominoがStart Area内に残っており全PlayerもStart Area内にいる状態から、追加の退出/再入場なしに即座にREADYへ遷移することを確認(旧Ready Re-arm方式は復活させていません)
+- **Retryとの区別**: 同じセッション内でRetry(SUCCESS→BUILDING)を実行し、Standing Dominoも含め登録済み全Dominoが削除されることを確認(`DespawnFallenRegistered`とは独立した`DespawnAllRegistered`が正しく呼ばれている)
+
+### Regression(既存機能の回帰確認)
+
+- Placement System(`PlacementController.cs`/`GhostDomino.cs`/`PlacementMarker.cs`/`PlacementMarker.prefab`)は本Stepを通じて一切変更していません(`git diff --stat`で確認)
+- Player Physics(Rigidbody全軸Rotation Freeze、Spin無し)・Player Push(`PlayerPushController.cs`)は無変更、動作に影響がないことを確認
+- READY条件(全PlayerがStart Area内+Standing Domino1つ以上)・SUCCESS Exploration(Overview Camera維持+自由移動)・Retry(全Domino削除+BUILD TIME完全Reset)は、いずれも第8.5章の仕様のまま動作することを確認
+
+### Console
+
+検証全体を通じて、Project由来のConsole Errorは0件でした。調査目的で一時追加したDebug LogおよびDiagnosticメソッドは、修正完了後にすべて削除済みです(`git diff`で`Diag`/`TEMP`等の残存が無いことを確認)。
+
+### Git
+
+コミットメッセージ: `Step 8.6: Stabilize chain failure detection and preserve standing dominoes`。詳細はコミット履歴を参照してください。
+
+### 未実装/確認できなかった事項
+
+- **Host/Client間での視覚的一致の直接確認**: Fallen-only Cleanup後にStanding DominoがHost/Client双方の画面で一致して残ることは、これまでのStepと同じMPPM Client Window自動化の制約により、Client側の直接キャプチャでの確認はできていません。Host側の`NetworkObject`一覧・`IsNetworkVisibleTo()`による間接確認と、Host自身の画面キャプチャによる確認に留まります
+- Physics Explosion自体の発生原因(近接Placementでのoverlap)を防ぐ側の対策(Placement時の最小間隔バリデーション等)は、Placement Systemが本Stepの変更対象外(Freeze)であるため、今回は対応していません。`outOfBoundsY`による事後の安全網のみで対応しています
+
+### 将来確認が必要な事項
+
+- Placement時の近接配置によるPhysics Explosionそのものを未然に防ぐバリデーション(最小配置間隔チェック等)の追加は、将来のStepでの検討対象です
+- `meaningfulTiltDelta`(既定2°)・`outOfBoundsY`(既定-10)はいずれも今回のテストで問題なく機能した初期値です。実際のStageレイアウトやDomino挙動次第で、将来調整が必要になる可能性があります
+- Step 9(未着手)に進む前に、開発者ご自身による複数回の実プレイでの最終確認を推奨します
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

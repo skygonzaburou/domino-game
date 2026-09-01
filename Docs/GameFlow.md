@@ -364,9 +364,9 @@ Step 8.5でREADY条件にStanding Domino数を追加したことで、この状�
 
 ---
 
-## 8. Chain Stop Failure判定(Step 7.5で追加)
+## 8. Chain Stop Failure判定(Step 7.5で追加、Step 8.6でMeaningful Activityへ拡張)
 
-正しい順序で進んでいても、Domino Chainが物理的に途中で完全に止まってしまうケースもFailureとして扱います。「3秒経過したらFailure」のような単純Timerではなく、**登録済みDominoが実際に静止しているかどうか**をRigidbodyの速度から判定します。
+正しい順序で進んでいても、Domino Chainが物理的に途中で完全に止まってしまうケースもFailureとして扱います。「3秒経過したらFailure」のような単純Timerではなく、**登録済みDominoに意味のある(Meaningful)Activityがあるかどうか**を見て判定します。
 
 ```csharp
 private void Update()
@@ -380,7 +380,7 @@ private void Update()
     _timeSinceLastFailureCheck = 0f;
 
     bool anyActive = DominoCleanupManager.Instance != null &&
-        DominoCleanupManager.Instance.AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold);
+        DominoCleanupManager.Instance.HasMeaningfulActivity(linearVelocityThreshold, angularVelocityThreshold);
 
     if (anyActive) { _settledSince = -1f; return; }
     if (_settledSince < 0f) { _settledSince = Time.time; return; }
@@ -392,28 +392,56 @@ private void Update()
 
 RUNNINGへ入った直後は、まだ誰もStart Dominoに触れていないため、全Dominoが完全に静止しているのが**正常な状態**です。`_startTriggered.Value`が`true`になるまでは`Update()`の先頭で早期returnし、PlayerがStart Dominoを倒すまで何秒でも待てるようにしています。
 
+### バグ修正の記録: Chain進行中のFalse FAILED(Step 8.6)
+
+実際のプレイで、Domino Chainが明らかに進行中にもかかわらず突発的に`FAILED`になる(False FAILED)ことが報告されました。単純に`failureSettleDuration`を伸ばすようなWorkaroundではなく、Root Causeを特定した上で以下の対策を行いました。
+
+- **Velocity閾値だけでは、ゆっくり傾いているDominoを見逃すことがある**: PollのタイミングとRigidbodyの一時的な状態(Contact Offset、瞬間的なSleep等)次第で、明らかに倒れている途中のDominoでも、その瞬間のVelocityだけを見ると閾値未満に見えることがある
+- **Stage-authored Domino(`DominoLine`等)が判定に一切含まれていなかった**: 旧`AnyTrackedDominoActive()`は`DominoSpawner`経由でSpawnされたDomino(`_tracked`)しか見ておらず、Scene上に直接配置されたDominoの動きはFailure Monitorに一切見えていなかった
+- **Fresh Fallen Event自体がFailure Timerをリセットしていなかった**: Checkpoint等が正しい順序で倒れても、それ以前から続いていた静止判定のカウントダウンには影響しなかった
+- **(副次的に発見)近接したDomino Spawnによる「Physics Explosion」**: 2つのDominoが重なった位置でSpawnされると、Unity Physicsが異常な初速で引き離そうとすることがあり、吹き飛んだDominoが地面をすり抜けて自由落下を続け、`_tracked`に残ったまま永久に「非常に高速で移動中」または(速度がNaN/Infinityへ発散した場合は逆に)「静止中」という不安定な信号を送り続け、Failure判定を汚染しうることが判明した
+
+修正の詳細(`meaningfulTiltDelta`によるTilt変化量判定、Stage-authored Domino用の`_sceneAuthored`リスト、Out-of-Bounds安全網)は`DominoLifecycle.md`第8章を参照してください。ここではGameFlowManager側の変更のみ説明します。
+
 ### Domino Activity判定(DominoCleanupManagerの既存Registryを再利用)
 
-「今何かが動いているか」の判定は、Step 7で追加した`DominoCleanupManager`が既に持っている登録リスト(`DominoSpawner`がSpawn時に`Register()`したもの)をそのまま再利用します。Scene全体を検索する処理は追加していません。
+「今何かが意味のある動きをしているか」の判定は、`DominoCleanupManager`が持っている登録リストをそのまま再利用します。`GameFlowManager`側からScene全体を検索する処理は追加していません(`DominoCleanupManager`内部の一度きりの起動時走査については`DominoLifecycle.md`を参照)。
 
 ```csharp
-// DominoCleanupManager.cs
-public bool AnyTrackedDominoActive(float linearVelocityThreshold, float angularVelocityThreshold)
+// DominoCleanupManager.cs(要約。詳細はDominoLifecycle.md参照)
+public bool HasMeaningfulActivity(float linearVelocityThreshold, float angularVelocityThreshold)
 {
-    float linSq = linearVelocityThreshold * linearVelocityThreshold;
-    float angSq = angularVelocityThreshold * angularVelocityThreshold;
-    foreach (var tracked in _tracked)
-    {
-        if (tracked.NetworkObject == null || !tracked.NetworkObject.IsSpawned) continue;
-        if (tracked.Rigidbody == null) continue;
-        if (tracked.Rigidbody.linearVelocity.sqrMagnitude > linSq) return true;
-        if (tracked.Rigidbody.angularVelocity.sqrMagnitude > angSq) return true;
-    }
-    return false;
+    // _tracked(Player-placed)と_sceneAuthored(Stage-authored)の両方をチェック。
+    // Velocity閾値に加えて、前回Poll時からのTilt Angle変化量(meaningfulTiltDelta、既定2°)も見る。
 }
 ```
 
-単純に速度が完全な`0`かどうかを見ると、浮動小数点誤差やDomino同士の微振動で誤判定しやすいため、`linearVelocityThreshold`(既定`0.02`m/秒)・`angularVelocityThreshold`(既定`0.05`ラジアン/秒)という小さな閾値を設け、これを下回れば「静止」とみなしています。1つでも閾値を超えて動いているDominoがあれば`_settledSince`を`-1`(未静止)へ戻し、静止継続時間の計測をやり直します。
+単純に速度が完全な`0`かどうかを見ると、浮動小数点誤差やDomino同士の微振動で誤判定しやすいため、`linearVelocityThreshold`(既定`0.02`m/秒)・`angularVelocityThreshold`(既定`0.05`ラジアン/秒)という小さな閾値を設け、これを下回れば(Tilt変化も無ければ)「静止」とみなしています。1つでも閾値を超えて動いている、またはTiltが変化し続けているDominoがあれば`_settledSince`を`-1`(未静止)へ戻し、静止継続時間の計測をやり直します。
+
+### Fresh Fallen EventもMeaningful Activity(Step 8.6)
+
+`OnZoneFallen()`が正しい順序のFresh Fallen Eventを処理する際、`_settledSince`を明示的に`-1`へリセットします。
+
+```csharp
+public void OnZoneFallen(DominoFallenZone zone)
+{
+    if (!IsServer) return;
+    if (_phase.Value != GamePhase.RUNNING) return;
+
+    int firedIndex = _orderedZones.IndexOf(zone);
+    if (firedIndex != _expectedZoneIndex) { TriggerFailure(); return; }
+
+    _settledSince = -1f;  // Step 8.6: Fresh Fallen Event自体がMeaningful Activity
+
+    if (zone == goalArea) { SetPhase(GamePhase.SUCCESS); return; }
+    if (zone == startArea) _startTriggered.Value = true;
+    else _checkpointProgress.Value++;
+
+    _expectedZoneIndex++;
+}
+```
+
+これにより、「Checkpointが正しく通過した直後、それ以前から続いていた無関係な静止判定タイマーが期限切れになってFalse FAILEDになる」という事態を防いでいます。
 
 ### SUCCESS優先
 
@@ -421,7 +449,7 @@ Goalの正しいFresh Fallen Eventは`OnZoneFallen()`から**同期的に即座�
 
 ---
 
-## 9. Failure Reset(FAILED → BUILDING)
+## 9. Failure Reset(FAILED → BUILDING、Step 8.6でFallen-onlyへ改訂)
 
 `TriggerFailure()`が呼ばれると(順序違反・Chain Stop Failureのいずれからでも共通)、以下の流れでBUILDINGへ戻ります。
 
@@ -432,38 +460,27 @@ sequenceDiagram
 
     GFM->>GFM: SetPhase(FAILED)
     Note over GFM: failureDisplayDuration秒待機(既定1.75秒、Dominoはまだ削除しない)
-    GFM->>DCM: DespawnAllRegistered(onComplete)
-    Note over DCM: 登録済み全DominoをBatch Despawn(1FrameあたりdespawnBatchSize個ずつ)
+    GFM->>DCM: DespawnFallenRegistered(onComplete)
+    Note over DCM: Fallen Dominoのみ Batch Despawn。Standing Dominoは維持(1FrameあたりdespawnBatchSize個ずつ)
     DCM-->>GFM: onComplete()
     GFM->>GFM: ResetRunState()(Progress/StartTriggered/ExpectedZoneIndex/Zone状態を全リセット)
-    GFM->>GFM: _readyRearmPending = true
     GFM->>GFM: SetPhase(BUILDING)
-    GFM->>GFM: ReevaluateReady()(既に全員Start Area外なら即Re-arm解除)
+    GFM->>GFM: ReevaluateReady()(残ったStanding Dominoで即READYになりうる)
 ```
+
+旧仕様(Step 7.5〜Step 8.5)では**登録済み全Domino**を削除していましたが、Step 8.6で**倒れているDominoだけ**を削除するよう変更しました。Playerは失敗した部分だけを置き直して再挑戦できます。「全Domino削除」自体はRetry(SUCCESS→BUILDING、第9.6章)で今も使われています。両者の違いはDominoLifecycle.mdの表を参照してください。
 
 ### Batch Despawn(Step 5のTransport Queue警告対策)
 
-Step 5で、10個のDominoを同一フレームでSpawnした際にUnityTransportの受信キュー警告が発生したことが記録されています。同じ問題がFailure時の一括Despawnでも起こりうるため、`DominoCleanupManager.DespawnAllRegistered()`は`despawnBatchSize`(既定10個)ごとに1フレーム分`yield return null`で間を空けるコルーチンとして実装しています。Transport自体のQueue Size設定は変更していません。
-
-```csharp
-// DominoCleanupManager.cs
-public void DespawnAllRegistered(Action onComplete) => StartCoroutine(DespawnAllRegisteredRoutine(onComplete));
-
-private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
-{
-    var toDespawn = ...; // 現在の登録リストのスナップショット
-    _tracked.Clear();
-    int count = 0;
-    foreach (var no in toDespawn)
-    {
-        if (no != null && no.IsSpawned) no.Despawn(true);
-        if (++count % despawnBatchSize == 0) yield return null;
-    }
-    onComplete?.Invoke();
-}
-```
+Step 5で、10個のDominoを同一フレームでSpawnした際にUnityTransportの受信キュー警告が発生したことが記録されています。同じ問題がFailure時の一括Despawnでも起こりうるため、`DominoCleanupManager.DespawnFallenRegistered()`/`DespawnAllRegistered()`はいずれも`despawnBatchSize`(既定10個)ごとに1フレーム分`yield return null`で間を空けるコルーチン(共通の内部実装)として実装しています。Transport自体のQueue Size設定は変更していません。
 
 全Dominoの削除が完了する(`onComplete`が呼ばれる)まで`GameFlowManager`は`BUILDING`へ戻さず待機します。これにより「Despawn途中でPlayerがもう配置を始めてしまう」ような状態を避けています。
+
+### Standing Dominoは次Attemptで再利用可能
+
+Fallen Domino削除後に残ったStanding Dominoは、`ResetRunState()`(→各Zoneの`OnRunStart()`)が実行される時点で「倒れていない」状態であるため、除外リストへは入りません。次のRUNNINGでは、これらのStanding Dominoも通常のDominoと同じくFresh Fallen Eventの対象になります(詳細は`DominoLifecycle.md`第7.6章)。
+
+Standing DominoがStart Area内に残っていて、かつ全PlayerがStart Area内にいれば、`ReevaluateReady()`が即座にREADYへ進めます(第6章のREADY条件がそのまま適用されるだけで、専用のRe-arm処理は必要ありません)。
 
 ### SUCCESSでは自動リセットしない
 
@@ -471,7 +488,7 @@ private IEnumerator DespawnAllRegisteredRoutine(Action onComplete)
 
 ### Cleanupとの責務分離
 
-`DespawnAllRegistered()`・`AnyTrackedDominoActive()`はいずれも`DominoCleanupManager`の既存Registry(Step 7で`DominoSpawner`がSpawn時に登録したリスト)を読み書きするだけで、`GamePhase`等のGameFlow状態には一切触れません。逆に`GameFlowManager`側も、Step 7から続く「BUILDING中に倒れたまま3秒経過したDominoを個別に削除する」通常のCleanup(`DominoCleanupManager.Update()`)には一切関与していません。**BUILDING中の個別Cleanup(Step 7)**と**FAILED時の一括Reset(Step 7.5)**は、目的も実行タイミングも完全に別のものです。詳細は`DominoLifecycle.md`を参照してください。
+`DespawnFallenRegistered()`・`DespawnAllRegistered()`・`HasMeaningfulActivity()`はいずれも`DominoCleanupManager`の既存Registry(`DominoSpawner`がSpawn時に登録したリスト、および起動時に一度だけ走査するStage-authoredリスト)を読み書きするだけで、`GamePhase`等のGameFlow状態には一切触れません。逆に`GameFlowManager`側も、Step 7から続く「BUILDING中に倒れたまま3秒経過したDominoを個別に削除する」通常のCleanup(`DominoCleanupManager.Update()`)には一切関与していません。**BUILDING中の個別Cleanup(Step 7)**、**FAILED時のFallen-only Reset(Step 8.6)**、**Retry時の全削除(Step 8.5)**は、目的も実行タイミングも完全に別のものです。詳細は`DominoLifecycle.md`を参照してください。
 
 ---
 

@@ -89,7 +89,7 @@ if (DominoCleanupManager.Instance != null)
 この方式には2つの利点があります。
 
 1. **パフォーマンス**: Scene内のDomino数が増えても、`Update()`のたびに全GameObjectを検索するコストが発生しません
-2. **Step 3の`DominoLine`が自動的に対象外になる**: `DominoLine`配下の20個のDominoは、Scene上に直接配置されたテスト用インスタンスであり、`DominoSpawner`経由でSpawnされたものではありません。そのため、これらは`Register()`が一度も呼ばれず、構造的にCleanup対象から除外されます(現在`DominoLine`自体が非アクティブなため実害はありませんが、将来再度アクティブ化した場合でも意図せずCleanup対象になることはありません)
+2. **`DominoLine`(Stage-authored)がDespawn対象から自動的に除外される**: `DominoLine`配下のDominoは、Scene上に直接配置された(Editor時点で置かれた)インスタンスであり、`DominoSpawner`経由でSpawnされたものではありません。そのため、これらは`Register()`が一度も呼ばれず、Despawn対象(`_tracked`)には構造的に一切含まれません。再配置する手段がないStage geometryのため、BUILDING Cleanup・FAILED Fallen-only Cleanup・Retry全削除のいずれによっても**絶対に削除されません**(下記「Step 8.6: Stage-authored DominoのActivity可視化」参照。Despawn対象外である点はStep 8.6でも変更していません)
 
 ---
 
@@ -121,25 +121,106 @@ Start/Checkpoint/Goal Areaの各Zone(`DominoFallenZone`)は、`OnTriggerEnter`/`
 
 ---
 
-## 7.6. Failure Reset(全Domino一括削除)との関係(Step 7.5)
+## 7.6. Failure Reset / Retryとの関係、および3種類のDespawnの使い分け(Step 7.5、Step 8.6で改訂)
 
-Step 7.5で、`GameFlowManager`が`FAILED`到達時に**登録済み全Domino**を一括削除する仕組み(Challenge Reset)を追加しました。これは本ドキュメントで説明してきた「BUILDING中に倒れたDominoを個別に3秒後削除する」通常のCleanupとは**目的もタイミングも別物**です。
+`GameFlowManager`は、状況に応じて3種類の異なるDespawn操作を使い分けます。本ドキュメントで説明してきた「BUILDING中に倒れたDominoを個別に3秒後削除する」通常のCleanupとは、いずれも**目的もタイミングも別物**です。
 
-| | BUILDING Cleanup(Step 7) | Failure Reset(Step 7.5) |
-|---|---|---|
-| 発生Phase | BUILDING中のみ | FAILED到達時のみ |
-| 対象 | 倒れたまま`Cleanup Delay`秒経過したDominoだけ | 登録済みDomino**全部**(倒れているか起立しているかを問わない) |
-| 判定主体 | `DominoCleanupManager.Update()`(角度+タイマー) | `GameFlowManager`(順序違反 or Chain Stop Failure) |
-| 実行API | `NetworkObject.Despawn(true)`を個別に呼ぶ | `DominoCleanupManager.DespawnAllRegistered(Action)` |
+| | BUILDING Cleanup(Step 7) | FAILED Reset(Step 8.6で改訂) | Retry(Step 8.5) |
+|---|---|---|---|
+| 発生Phase | BUILDING中のみ | FAILED到達時のみ | SUCCESS中のRetry要求時のみ |
+| 対象 | 倒れたまま`Cleanup Delay`秒経過したDominoだけ | **Fallen Dominoのみ**(`fallenAngleThreshold`以上傾いたもの) | 登録済みDomino**全部**(倒れているか起立しているかを問わない) |
+| Standing Dominoへの影響 | 触れない | **維持する**(次Attemptで再利用可能) | 全削除 |
+| 判定主体 | `DominoCleanupManager.Update()`(角度+タイマー) | `GameFlowManager`(順序違反 or Chain Stop Failure) | `GameFlowManager`(Retry Request) |
+| 実行API | `NetworkObject.Despawn(true)`を個別に呼ぶ | `DominoCleanupManager.DespawnFallenRegistered(Action)` | `DominoCleanupManager.DespawnAllRegistered(Action)` |
 
-`DespawnAllRegistered()`は`GameFlowManager`から呼ばれるHost専用APIで、`_tracked`リストのスナップショットを取ってから即座にリストを空にし(以後BUILDING Cleanupの`Update()`が同じDominoを二重に処理しないように)、`despawnBatchSize`(既定10個)ごとに1フレーム分`yield return null`を挟みながら`Despawn(true)`を呼ぶコルーチンです。全て完了すると渡された`onComplete`コールバックを呼び、`GameFlowManager`はこれを待ってから`GamePhase`を`BUILDING`へ戻します(詳細は`GameFlow.md`第9章を参照)。
+**なぜFAILEDとRetryでAPIを分けたか(Step 8.6)**: 「失敗した部分だけ置き直して再挑戦したい」というFAILEDの用途と、「コースを完全に作り直す」というRetry(SUCCESS後)の用途は、意図が全く異なります。両者が同じ`DespawnAllRegistered()`を共有していると、将来どちらかの挙動だけを変えたくなった時に互いへ影響してしまうため、`DespawnFallenRegistered()`という別APIとして分離しました。
 
-`AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold)`も同じくStep 7.5で追加したAPIで、`_tracked`の各DominoのRigidbody速度を閾値と比較するだけの読み取り専用メソッドです。`GameFlowManager`のChain Stop Failure判定(`GameFlow.md`第8章)から呼ばれますが、こちらもGameFlow状態を一切書き換えません。
+```csharp
+// DominoCleanupManager.cs - 内部実装は共通のDespawnRoutine()を allowStanding フラグで使い分けるだけ
+public void DespawnAllRegistered(Action onComplete)
+    => StartCoroutine(DespawnRoutine(_tracked, allowStanding: true, onComplete));
+
+public void DespawnFallenRegistered(Action onComplete)
+    => StartCoroutine(DespawnRoutine(_tracked, allowStanding: false, onComplete));
+```
+
+いずれも`_tracked`(Player-placed Domino)だけが対象です。`_sceneAuthored`(Stage-authored、下記参照)はどちらのAPIからも一切触れられません。Batch Despawn(`despawnBatchSize`ごとに1Frame分`yield return null`を挟む)の仕組みは両APIで共通です。
+
+**Standing Dominoが次Attemptで再利用可能な理由**: `DominoFallenZone.OnRunStart()`(`GameFlow.md`第4章)は、その時点で実際に倒れているDominoだけを除外リストへ入れます。FAILED ResetはFallen Dominoを`ResetRunState()`(→各Zoneの`OnRunStart()`)より**前に**削除するため、Reset完了時点でZone内に残っているDominoは必ず「倒れていない」状態です。結果として除外リストは空になり、追加のコード変更なしに、残ったStanding Dominoは新しいAttemptで通常通りFresh Fallen Eventの対象になります。
 
 ---
 
-## 8. 既知の制約・今後の検討事項
+## 8. Meaningful Activity(Chain Stop Failure判定の活動検知、Step 8.6)
+
+### 背景: なぜ`AnyTrackedDominoActive`を`HasMeaningfulActivity`へ改名・拡張したか
+
+実際のプレイで、Domino Chainが明らかに進行中にもかかわらず`FAILED`になってしまう(False FAILED)ことが報告されました。調査の結果、Velocity(速度)閾値だけに頼った瞬間的なActivity判定には、以下のような弱点があることがわかりました。
+
+- **Slowly Tipping Domino**: ゆっくり傾いているDominoは、Poll(既定0.25秒おき)のタイミング次第で瞬間的にVelocityが閾値未満になることがある(Contact Offset、Rigidbodyの一時的なSleep等)。見た目には明らかに倒れている途中でも、Velocityだけを見ると「静止している」と誤判定されうる
+- **Stage-authored Dominoが判定対象外だった**: `AnyTrackedDominoActive()`は`_tracked`(Player-placed)しか見ていなかったため、Scene上に直接配置されたDominoが実際に激しく動いていても、Failure Monitorには一切見えていなかった
+- **Fresh Fallen Event自体がFailure Timerをリセットしていなかった**: Checkpoint等が正しい順序で倒れても、それ以前から続いていた「静止判定」のカウントダウンには一切影響しなかった
+
+### 対策1: Tilt Angle変化量による判定
+
+Velocity閾値に加えて、**前回Poll時からのTilt Angle変化量**も見るようにしました。
+
+```csharp
+// DominoCleanupManager.cs
+float tilt = Vector3.Angle(tracked.Transform.up, Vector3.up);
+float previousTilt = tracked.PreviousTiltAngle;
+tracked.PreviousTiltAngle = tilt;
+
+if (tracked.Rigidbody.linearVelocity.sqrMagnitude > linSq) { any = true; continue; }
+if (tracked.Rigidbody.angularVelocity.sqrMagnitude > angSq) { any = true; continue; }
+if (previousTilt >= 0f && Mathf.Abs(tilt - previousTilt) > meaningfulTiltDelta) { any = true; }
+```
+
+`meaningfulTiltDelta`(既定2°)を超える角度変化があれば、Velocityが閾値未満でも「Activity中」とみなします。**Angleそのもの(何度傾いているか)ではなく、Angleの変化量**を見ている点が重要です。30°で完全に静止したDominoを永遠にActive扱いしてしまうと、今度はRUNNINGが永久に終了しなくなるため、「動き続けているかどうか」だけを判定します。`PreviousTiltAngle`は`HasMeaningfulActivity()`が呼ばれるたびに更新されますが、これは`GameFlowManager`のChain Stop Failure監視(`failureCheckInterval`ごと)がこのメソッドの唯一の呼び出し元であるため安全です。
+
+### 対策2: Stage-authored Dominoの活動可視化
+
+`_sceneAuthored`という新しいListを追加し、起動時(Server側、初回`Update()`)に1回だけ`GameObject.FindGameObjectsWithTag("Domino")`でScene上の全Domino-tagged NetworkObjectを走査し、`_tracked`にまだ入っていないもの(= `DominoSpawner`を経由していない、Stage-authoredなもの)を登録します。**この一度きりの走査だけがScene全体検索であり、`Update()`のたびに走査するわけではありません。**
+
+```csharp
+private void ScanSceneAuthoredDominoes()
+{
+    var dominoObjects = GameObject.FindGameObjectsWithTag("Domino");
+    for (int i = 0; i < dominoObjects.Length; i++)
+    {
+        NetworkObject no = dominoObjects[i].GetComponent<NetworkObject>();
+        if (no == null) continue;
+        _sceneAuthored.Add(new TrackedDomino { NetworkObject = no, Transform = no.transform, Rigidbody = no.GetComponent<Rigidbody>() });
+    }
+}
+```
+
+`HasMeaningfulActivity()`は`_tracked`・`_sceneAuthored`の**両方**をチェックします。ただし`_sceneAuthored`は**Activity検知専用**であり、`DespawnAllRegistered()`/`DespawnFallenRegistered()`/BUILDING Cleanupのいずれからも一切参照されません(前章参照)。Stage-authored Dominoは再配置する手段が無いため、Despawn対象に含めることは決してありません。
+
+### 対策3: Fresh Fallen EventによるFailure Timerのリセット
+
+`GameFlowManager.OnZoneFallen()`が、正しい順序のFresh Fallen Eventを処理する際、`_settledSince`(静止判定の開始時刻)を明示的に`-1`(未開始)へリセットするようにしました。詳細は`GameFlow.md`第8章を参照してください。
+
+### 対策4: Out-of-Bounds安全網(物理的な吹き飛び対策)
+
+調査中、近接した位置へDominoを連続でSpawnした際、Unity Physicsが重なったRigidbody同士を引き離そうとして異常に大きな初速を与えてしまう(いわゆる「Physics Explosion」)現象が実際に再現しました。吹き飛んだDominoは地面をすり抜けて自由落下を続け、速度が際限なく増大し続けるため、`_tracked`に残ったままだと**Failure Monitorの活動判定を永久に汚染**してしまいます。
+
+対策として、`DominoCleanupManager.Update()`の既存ループ(`_tracked`を毎Poll確認する処理)に、Y座標が`outOfBoundsY`(既定-10)を下回ったDominoを**Phaseを問わず即座にDespawn**する安全網を追加しました。Scene全体を検索する処理ではなく、既存の`_tracked`ループに1行追加しただけです。
+
+```csharp
+if (tracked.Transform.position.y < outOfBoundsY)
+{
+    NetworkObject stray = tracked.NetworkObject;
+    _tracked.RemoveAt(i);
+    stray.Despawn(true);
+    continue;
+}
+```
+
+---
+
+## 9. 既知の制約・今後の検討事項
 
 - **Object Poolingは未導入**: 現時点ではSpawn/Despawnのたびに実際にGameObjectを生成・破棄しています。将来的にDomino数が大幅に増える場合はPoolingの検討余地がありますが、Step 7では通常のNetwork Spawn/Despawn Lifecycleの動作確認を優先しています
-- **SUCCESS後のリセットは未実装**: SUCCESS到達後、コースを最初から作り直す(Dominoを一括削除する)機能はまだありません(FAILED後のResetとは別に、SUCCESS後のRetry/Next Stageとして将来のStepで扱う予定です)
 - ~~Clear Judgementの「まとめて追いつく」既知の課題~~: **Step 7.5で解消済みです**。`GameFlow.md`の第5章を参照してください
+- ~~SUCCESS後のリセットは未実装~~: **Step 8.5でRetryとして実装済みです**。第7.6章を参照してください
+- **Physics Explosion自体の防止は未着手**: Step 8.6で対策したのは「吹き飛んだDominoがFailure判定を汚染しない」ことであり、吹き飛び自体(近接Spawn時の異常な初速)を防ぐPlacement側のValidation追加は、Placement Systemの凍結方針により今回は着手していません。将来的にPlacement側で「既存Dominoと重ならない位置かどうか」の検証を追加する余地があります

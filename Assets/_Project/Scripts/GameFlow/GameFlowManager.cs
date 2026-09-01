@@ -131,7 +131,7 @@ namespace Domino.GameFlow
             _timeSinceLastFailureCheck = 0f;
 
             bool anyActive = DominoCleanupManager.Instance != null &&
-                DominoCleanupManager.Instance.AnyTrackedDominoActive(linearVelocityThreshold, angularVelocityThreshold);
+                DominoCleanupManager.Instance.HasMeaningfulActivity(linearVelocityThreshold, angularVelocityThreshold);
 
             if (anyActive)
             {
@@ -279,6 +279,13 @@ namespace Domino.GameFlow
                 return;
             }
 
+            // Step 8.6: a legitimate (in-order) Fresh Fallen Event is itself Meaningful Chain
+            // Activity, independent of what DominoCleanupManager.HasMeaningfulActivity() sees
+            // on its own polling cadence. Without this, a settle-timer that happened to already
+            // be counting down from an earlier, unrelated lull could expire and fire a False
+            // FAILED within moments of genuine Progress being made.
+            _settledSince = -1f;
+
             if (zone == goalArea)
             {
                 SetPhase(GamePhase.SUCCESS);
@@ -292,7 +299,7 @@ namespace Domino.GameFlow
             else
             {
                 _checkpointProgress.Value++;
-                SetPhase(GamePhase.RUNNING);
+                Debug.Log($"[GameFlowManager] Checkpoint progress -> {_checkpointProgress.Value}/{_orderedCheckpoints.Count}");
             }
 
             _expectedZoneIndex++;
@@ -310,10 +317,14 @@ namespace Domino.GameFlow
         {
             yield return new WaitForSeconds(failureDisplayDuration);
 
+            // Step 8.6: FAILED despawns only Fallen Dominoes, leaving Standing ones on the
+            // Stage so the Player can re-place just the failed section instead of rebuilding
+            // from scratch. Retry (RetrySequence below) intentionally still uses
+            // DespawnAllRegistered - the two are different operations with different intent.
             bool despawnComplete = false;
             if (DominoCleanupManager.Instance != null)
             {
-                DominoCleanupManager.Instance.DespawnAllRegistered(() => despawnComplete = true);
+                DominoCleanupManager.Instance.DespawnFallenRegistered(() => despawnComplete = true);
             }
             else
             {
