@@ -234,26 +234,28 @@ MPPMには、各Playerに好きな文字列の「Tag」を付けられる機能�
 
 ---
 
-## 15. NetworkBootstrapが何をしているか
+## 15. NetworkBootstrapが何をしているか(Step 9.1で全面改訂)
 
-`NetworkBootstrap.cs` は、Scene開始時に「自分はHostとして起動すべきか、Clientとして接続すべきか」を自動判定して実行するスクリプトです。`NetworkManager` と同じGameObjectに付いています。
+`NetworkBootstrap.cs` は現在、**Development Auto-start Mode専用**のスクリプトです。`NetworkManager` と同じGameObject(MainMenu Sceneに常駐、Step 9)に付いています。
 
 ```csharp
 private void Start()
 {
-    if (TryStartFromMultiplayerPlayModeTags()) return;
+    if (developmentAutoStartViaMppmTag && TryStartFromMultiplayerPlayModeTags()) return;
     StartFromCommandLineArgs();
 }
 ```
 
+**通常のGame起動(Normal Startup、Step 9で実装したTITLE画面から始まる経路)では、このスクリプトは何もしません。** `NetworkManager.StartHost()`/`StartClient()`は、`MainMenuController`/`StageSelectController`/`OnlineSessionController`がUserのButton操作(TIME ATTACK選択・CREATE ROOM・JOIN ROOM)に応じて呼び出します。詳細は`MenuFlow.md`「8. NetworkBootstrap」を参照してください。
+
 判定は2段階です。
 
-1. **MPPMのTagを確認する**(`TryStartFromMultiplayerPlayModeTags`): 前章の通り、`"Host"` タグが付いていれば `StartHost()`、`"Client"` タグが付いていれば `StartClient()` を呼ぶ。該当するTagがなければ何もせず `false` を返す。
-2. **コマンドライン引数を確認する**(`StartFromCommandLineArgs`): 1で何も起動しなかった場合のフォールバック。これはEditorではなく実際にビルドしたゲーム(.exe)を使ってテストするための経路で、起動時の引数に `-host` または `-client` が含まれていれば、それに応じて起動する。**Editor内(`Application.isEditor == true`)ではこの経路は使われません。**
+1. **MPPMのTagを確認する**(`TryStartFromMultiplayerPlayModeTags`): `developmentAutoStartViaMppmTag`(Inspector、既定`false`)が`true`の場合のみ実行。前章の通り、`"Host"` タグが付いていれば `StartHost()`、`"Client"` タグが付いていれば `StartClient()` を呼ぶ。
+2. **コマンドライン引数を確認する**(`StartFromCommandLineArgs`): 1で何も起動しなかった場合のフォールバック。実際にビルドしたゲーム(.exe)を起動時の引数`-host`/`-client`付きで実行した場合にのみ働く経路。**Editor内(`Application.isEditor == true`)ではこの経路は使われません。**
 
-この2つの経路が同時に問題を起こすことはありません。MPPMのTagはEditor(Main EditorとVirtual Player)でのみ意味を持ち、コマンドライン引数はビルドしたゲームを直接実行したときにしか使われないため、状況が重なることがないからです。
+**バグ修正の記録(Step 9.1)**: Step 9AでStage Select実装時に、この`developmentAutoStartViaMppmTag`によるGateが無く、MPPM `"Host"` Tagが付いているだけで無条件にAuto-startしていました。本ProjectではMain EditorにこのTagが恒久的に設定されていたため、**普通にPlay Modeへ入っただけでMainMenuのTITLE画面が完全にSkipされ、Gameplayへ直行してしまう**という実害のあるバグとして発覚し、修正しました。詳細は`ImplementationStatus.md`のStep 9.1章を参照してください。
 
-**なぜこのスクリプトが必要か**: `NetworkManager` は「HostになるかClientになるか」を自分では決めてくれません。誰かが明示的に `StartHost()` または `StartClient()` を呼ぶ必要があります。UIボタンなどはまだ実装していないため、現時点ではこの `NetworkBootstrap` が「起動時に自動でその呼び出しを行う」係を担っています。将来、タイトル画面やロビー画面(GameDesign.md 13節)を実装する際には、このスクリプトの役割はUIからの明示的なボタン操作に置き換わっていく想定です。
+MPPMでの高速な開発テストが必要な場合は、`NetworkManager` GameObjectの`NetworkBootstrap`コンポーネントで`developmentAutoStartViaMppmTag`を明示的にONにしてください(Scene保存前提、開発者自身によるOpt-in操作)。
 
 ---
 

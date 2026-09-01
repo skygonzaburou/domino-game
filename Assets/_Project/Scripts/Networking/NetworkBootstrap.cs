@@ -10,10 +10,22 @@ namespace Domino.Networking
     // Auto-start Mode (MPPM tags / CLI args) - the normal Interactive Menu Mode path (a real
     // Player choosing Time Attack / Online Play) is driven entirely by MainMenuController and
     // never touches this class.
+    //
+    // Step 9.1: Normal Interactive Mode must ALWAYS land on MainMenu's Title screen - merely
+    // having an MPPM "Host" Tag (a Development-only Player identity, set once on the Main
+    // Editor for this project's MPPM setup) must never by itself start Networking or load
+    // Gameplay. Development Auto-start is Explicit Opt-in only: developmentAutoStartViaMppmTag
+    // must be deliberately enabled in the Inspector (defaults to false), and the CLI-arg path
+    // already only ever applies outside the Editor (a genuine Standalone launch with an
+    // explicit -host/-client argument - never a normal double-click launch).
     [DefaultExecutionOrder(-100)]
     public class NetworkBootstrap : MonoBehaviour
     {
-        [Tooltip("Development Auto-start (MPPM tag / CLI arg) が発火した際、Hostであれば自動的にロードするGameplay Scene名")]
+        [Header("Development Auto-start (Explicit Opt-in only)")]
+        [Tooltip("ONの場合のみ、この Player(Main EditorまたはMPPM Virtual Player)のMPPM Tag(Host/Client)に応じて自動的にNetworkを開始しGameplayへ直行します。通常のInteractive Menu Mode(普通にPlayした場合)では必ずOFFのままにしてください - MainMenuからのUser Actionでのみ開始するのが標準動作です。")]
+        [SerializeField] private bool developmentAutoStartViaMppmTag = false;
+
+        [Tooltip("Development Auto-start (MPPM Tag Opt-in、または-host/-client CLI引数)が発火した際、Hostであれば自動的にロードするGameplay Scene名")]
         [SerializeField] private string developmentGameplaySceneName = "SampleScene";
 
         private void Awake()
@@ -28,7 +40,7 @@ namespace Domino.Networking
 
         private void Start()
         {
-            if (TryStartFromMultiplayerPlayModeTags()) return;
+            if (developmentAutoStartViaMppmTag && TryStartFromMultiplayerPlayModeTags()) return;
             StartFromCommandLineArgs();
         }
 

@@ -960,6 +960,74 @@ Step 9Cでは、Online Stage Select(Host-only操作・Selected Stage同期)・ST
 
 ---
 
+## Step 9.1: Main Menu Startup Flow Fix
+
+Step 9完了後、実機で「MainMenu Sceneを開いてPlayすると、何も操作していないのにGameplay Sceneへ自動遷移してしまう」というバグ報告を受け、その修正のみを行いました。Gameplay側・Step 9で実装したOnline Architecture(NGO/UnityTransport/Multiplayer Services/Relay/Session API/Create Room/Join Room/Host Stage Selection/Late Join Lock/Persistent NetworkManager等)には一切変更を加えていません。
+
+### Root Cause
+
+実際の`NetworkBootstrap.cs`のCodeを読んで確認したところ、報告どおりの原因でした。
+
+- `NetworkBootstrap.Start()`が無条件に`TryStartFromMultiplayerPlayModeTags()`を呼んでいました
+- `TryStartFromMultiplayerPlayModeTags()`は`Unity.Multiplayer.PlayMode.CurrentPlayer.Tags`(MPPM Player識別用のTag)に`"Host"`が含まれているかどうかだけを判定条件にしており、それ以外の「本当にAuto-startして良いか」の確認が一切ありませんでした
+- 本Projectでは開発テストの都合上、Main EditorにMPPM `"Host"` Tagが恒久的に設定されているため、**普通にPlay Modeへ入っただけで**この判定が`true`になり、即座に`NetworkManager.StartHost()`→`LoadDevelopmentGameplaySceneIfServer()`(`NetworkManager.SceneManager.LoadScene("SampleScene", LoadSceneMode.Single)`)が実行され、MainMenuのTITLE画面が完全にSkipされてGameplayへ直行していました
+- MPPM Tagは本来「Development上のPlayer識別情報」でしかなく、「今すぐAuto-startして良い」という明示的な合図ではないにも関わらず、両者を区別せず同一視していたことが根本原因です
+- CLI引数(`-host`/`-client`)経路(`StartFromCommandLineArgs`)自体は、元々`if (Application.isEditor) return;`によりEditor内では機能しない設計だったため、今回のバグには関与していませんでした
+
+### Fix
+
+**Normal Startup**: 通常のGame起動・通常のPlay Modeでは、`NetworkBootstrap`は一切Networkを開始しません。`NetworkManager.IsListening`は`false`のまま、MainMenuのTITLE画面で待機します。
+
+**Development Auto-start Mode(Explicit Opt-in化)**: `NetworkBootstrap`に`developmentAutoStartViaMppmTag`(`bool`、Inspector、既定値`false`)を追加しました。
+
+```csharp
+private void Start()
+{
+    if (developmentAutoStartViaMppmTag && TryStartFromMultiplayerPlayModeTags()) return;
+    StartFromCommandLineArgs();
+}
+```
+
+この値が`true`の場合のみ、以前と同じMPPM Tagベースの自動Host/Client起動+Gameplay Scene Auto Loadが働きます。既定は`false`のため、MPPM `"Host"` Tagが付与されていても、それだけではAuto-startしません。MPPM/CLIによる開発テスト自体は削除しておらず、開発者がInspector上で明示的にONにした場合のみ以前の一段階Auto-start体験を利用できます。
+
+**MPPM Behavior**: MPPM Tag自体は引き続き`CurrentPlayer.Tags`から読み取り可能なまま残していますが(Development上のPlayer識別情報として)、Menuを自動Skipするトリガーとしては使用しなくなりました。
+
+**CLI Behavior**: `StartFromCommandLineArgs()`(`-host`/`-client`)は変更していません。元々`Application.isEditor`によりEditor内では機能せず、Standalone Buildを実際にコマンドライン引数付きで起動した場合にのみ働く、既に十分Explicitな経路だったためです。
+
+### 動作確認済み(Runtime Test)
+
+Step 9.1の修正により、これまでのStepで必要だった「検証のたびに`NetworkBootstrap`を手動でDisableする」という回避策が**不要になりました**(この修正自体がその回避策を本来の形で解消するものです)。
+
+- **Test A(No Input)**: Play Mode開始直後、`MainMenuController.CurrentState == Title`・`NetworkManager.IsListening == false`・`ActiveScene == "MainMenu"`であることを確認。10秒以上経過後も状態が変化しない(Still TITLE、No Host、No Client、No Scene Transition)ことを実時間で確認
+- **Test B(Single Player)**: TITLE→START(本物のButton Click経路)→TIME ATTACK→STAGE SELECT→Stage 1選択→`NetworkManager.IsHost/IsListening == true`→`ActiveScene == "SampleScene"`→Domino配置・BUILD TIME開始まで正常に動作することを確認
+- **Test C(Online Create)**: TITLE→START→ONLINE PLAY→CREATE ROOM**によって初めて**Relay Sessionが作成され、実際のJoin Code(例: `N96JBW`)が発行・表示されることを確認。MainMenu表示直後(TITLE/MODE SELECT/ONLINE SELECT滞在中)にSessionが自動作成されないことも、Create Room操作前の`NetworkManager.IsListening == false`確認により裏付け
+- **NetworkManager状態**: 修正後もMainMenu Sceneに`NetworkManager`(+`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)が存在すること自体は変更していません(Persistent NetworkManager Architecture自体は維持)。通常起動時に`IsListening == false`の状態でTITLE画面が表示されることを確認しました
+- **MPPM Virtual Player**: 検証時、実際にMPPM Virtual Player("Player 2 [Client]")プロセスが起動していることを確認しましたが、これまでのStepと同じ制約(専用のUnityMCPブリッジを持たないプロセスへの直接的な内部状態確認・操作ができない)により、そのProcess自身のGame Viewでの直接目視確認はできませんでした。Main Editorと完全に同一のCompiled Code・同一のSaved Sceneを実行するプロセスであるため、Main Editorでの確認結果から同じ挙動になることを合理的に推定していますが、独立した目視確認ではない点を明記します
+- Console: 本Step実装コード由来のError/Warningは最終確認時点で0件(既知/Step 9B以来のOnline Room Leave Timeout Warningを除く、後述)
+
+### Regression
+
+- **Stage Select**: Test Bで正常動作を確認(上記)
+- **Relay/Session**: Test Cで正常動作を確認(上記)。CREATE ROOM実行後、実際のUnity Relayへ接続し本物のJoin Codeが発行されることを確認
+- **Online Room / Host Stage Selection**: Step 9B/9Cで実装したRoom UI・Host-only Stage Select自体はコード変更していないため、機能的な差分はありません(Test Cの範囲でOnline Room画面の表示自体は確認済み)
+- **Gameplay(BUILD TIME/READY/Failure/Success/Retry等)**: Test Bの範囲でPlacement・BUILD TIME開始を確認。Gameplay Script自体は一切変更していません(Freeze対象、変更なし)
+
+### Console
+
+最終確認時点でProject由来のError 0件。Warning 1件(`"[OnlineSessionController] LeaveAsync() timed out after 5s..."`) - これはStep 9Bで既に文書化済みの既知挙動(検証環境でのRelay接続劣化に起因すると推定される、Session離脱時のTimeout Guard発火)であり、今回のStartup Flow修正とは無関係かつStep 9.1のスコープ外です。
+
+### 未実装/確認できなかった事項
+
+- MPPM Virtual Player自身の画面での直接目視確認(上記、これまでのStepと同じ制約)
+- Standalone Build自体を実際にビルドしての起動確認(Editor Play Modeでの確認のみ実施)
+
+### 将来確認が必要な事項
+
+- Standalone Buildでの実機確認(TITLE画面から始まることの最終確認)
+- `developmentAutoStartViaMppmTag`をON にした場合の、以前と同じMPPM Auto-start体験が引き続き機能することの確認(今回は既定値`false`での修正確認が主眼のため、ON側の再確認は簡易的なコードReviewに留まっています)
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。
