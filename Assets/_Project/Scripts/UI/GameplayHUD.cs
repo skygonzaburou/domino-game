@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using Domino.GameFlow;
+using Domino.Menu;
 using Domino.Player;
 
 namespace Domino.UI
@@ -37,14 +38,23 @@ namespace Domino.UI
         [SerializeField] private Button restartButton;
         [SerializeField] private Key pauseKey = Key.Escape;
 
+        [Header("Pause Navigation (Step 10B)")]
+        [SerializeField] private Button pauseStageSelectButton;
+        [SerializeField] private TextMeshProUGUI pauseStageSelectButtonText;
+        [SerializeField] private Button pauseTitleButton;
+
         [Header("Confirmation Dialog (Step 10A)")]
         [SerializeField] private GameObject confirmationPanel;
         [SerializeField] private TextMeshProUGUI confirmationMessageText;
         [SerializeField] private Button confirmYesButton;
         [SerializeField] private Button confirmNoButton;
 
-        // Step 10B will add StageSelect/Title here alongside Restart.
-        private enum PendingConfirmAction { None, Restart }
+        [Header("Result Navigation (Step 10B)")]
+        [SerializeField] private Button resultStageSelectButton;
+        [SerializeField] private TextMeshProUGUI resultStageSelectButtonText;
+        [SerializeField] private Button resultTitleButton;
+
+        private enum PendingConfirmAction { None, Restart, StageSelect, Title }
         private PendingConfirmAction _pendingAction = PendingConfirmAction.None;
 
         private void Awake()
@@ -52,8 +62,12 @@ namespace Domino.UI
             if (retryButton != null) retryButton.onClick.AddListener(RequestRetry);
             if (resumeButton != null) resumeButton.onClick.AddListener(RequestResume);
             if (restartButton != null) restartButton.onClick.AddListener(OnRestartButtonClicked);
+            if (pauseStageSelectButton != null) pauseStageSelectButton.onClick.AddListener(OnPauseStageSelectButtonClicked);
+            if (pauseTitleButton != null) pauseTitleButton.onClick.AddListener(OnPauseTitleButtonClicked);
             if (confirmYesButton != null) confirmYesButton.onClick.AddListener(OnConfirmYes);
             if (confirmNoButton != null) confirmNoButton.onClick.AddListener(OnConfirmNo);
+            if (resultStageSelectButton != null) resultStageSelectButton.onClick.AddListener(OnResultStageSelectButtonClicked);
+            if (resultTitleButton != null) resultTitleButton.onClick.AddListener(OnResultTitleButtonClicked);
         }
 
         private void Update()
@@ -91,6 +105,23 @@ namespace Domino.UI
             }
 
             HandlePauseKey(phase, isPaused, confirmationOpen);
+            UpdateStageSelectGating();
+        }
+
+        // Section 28/40: Online Stage Select (from either the Pause Menu or the SUCCESS Result)
+        // is Host-only - a Client sees a Disabled Button labeled "Host Only" rather than a
+        // silently-ignored Click. Single Player always allows it (there is no one else to defer
+        // to). NetworkManager.Singleton.IsHost is the same Authority check used everywhere else
+        // in this project - "Host" and "Server" are one and the same in this Host+Client model.
+        private void UpdateStageSelectGating()
+        {
+            bool canStageSelect = !GameSessionContext.IsOnline || (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
+            string label = canStageSelect ? "Stage Select" : "Stage Select (Host Only)";
+
+            if (pauseStageSelectButton != null) pauseStageSelectButton.interactable = canStageSelect;
+            if (pauseStageSelectButtonText != null) pauseStageSelectButtonText.text = label;
+            if (resultStageSelectButton != null) resultStageSelectButton.interactable = canStageSelect;
+            if (resultStageSelectButtonText != null) resultStageSelectButtonText.text = label;
         }
 
         // Escape means exactly one of three things per press, in this priority order (Section
@@ -147,6 +178,49 @@ namespace Domino.UI
             ShowConfirmation("Restart the current stage?\nAll progress will be lost.", PendingConfirmAction.Restart);
         }
 
+        // Section 16: Pause Menu's Stage Select always confirms first, regardless of Single
+        // Player / Online - unlike Title (below), the wording does not change either.
+        private void OnPauseStageSelectButtonClicked()
+        {
+            ShowConfirmation("Return to Stage Select?\nCurrent progress will be lost.", PendingConfirmAction.StageSelect);
+        }
+
+        // Section 17: Pause Menu's Title always confirms first too, but the wording differs -
+        // Online explicitly warns about disconnecting from the Session, Single Player warns
+        // about losing progress.
+        private void OnPauseTitleButtonClicked()
+        {
+            string message = GameSessionContext.IsOnline
+                ? "Leave the online game and return to Title?\nYou will be disconnected from the session."
+                : "Return to Title?\nCurrent progress will be lost.";
+            ShowConfirmation(message, PendingConfirmAction.Title);
+        }
+
+        // Section 40: SUCCESS Result's Stage Select needs no confirmation (the Run is already
+        // over) - still Host-only-gated when Online (UpdateStageSelectGating above), so this is
+        // a defensive re-check matching the disabled Button, not the only line of defense.
+        private void OnResultStageSelectButtonClicked()
+        {
+            bool canStageSelect = !GameSessionContext.IsOnline || (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
+            if (!canStageSelect) return;
+            GameplayNavigationController.Instance?.RequestReturnToStageSelect();
+        }
+
+        // Section 41/42: SUCCESS Result's Title needs no confirmation for Single Player (the Run
+        // is already over, nothing left to lose), but Online always confirms - leaving here
+        // disconnects from the Session, which Single Player has no equivalent of.
+        private void OnResultTitleButtonClicked()
+        {
+            if (GameSessionContext.IsOnline)
+            {
+                ShowConfirmation("Leave the online game?\nYou will be disconnected from the session.", PendingConfirmAction.Title);
+            }
+            else
+            {
+                GameplayNavigationController.Instance?.RequestReturnToTitle();
+            }
+        }
+
         private void ShowConfirmation(string message, PendingConfirmAction action)
         {
             _pendingAction = action;
@@ -169,6 +243,12 @@ namespace Domino.UI
             {
                 case PendingConfirmAction.Restart:
                     GameFlowManager.Instance?.RequestRestartRpc();
+                    break;
+                case PendingConfirmAction.StageSelect:
+                    GameplayNavigationController.Instance?.RequestReturnToStageSelect();
+                    break;
+                case PendingConfirmAction.Title:
+                    GameplayNavigationController.Instance?.RequestReturnToTitle();
                     break;
             }
         }

@@ -119,6 +119,28 @@ namespace Domino.Networking
             }
         }
 
+        // Step 10B (Section 31): symmetric counterpart to the Spawn-on-Scene-Load logic above.
+        // Called (Server-only) right before returning from Gameplay to MainMenu's Stage Select
+        // while staying networked (Online "Stage Select" from the Pause Menu / SUCCESS Result) -
+        // a NetworkManager.SceneManager.LoadScene(..., LoadSceneMode.Single) does NOT by itself
+        // destroy dynamically-Spawned Player NetworkObjects (only Scene-placed ones get torn
+        // down automatically). This is exactly the Root Cause mechanism Step 9.2 fixed for the
+        // forward Menu -> Gameplay direction (a Player silently surviving a Scene transition);
+        // the same risk exists in reverse and must be handled explicitly here so no Gameplay
+        // Player ever reappears - falling - in MainMenu's Room/Stage Select.
+        public void DespawnAllGameplayPlayers()
+        {
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+
+            foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
+            {
+                if (client.PlayerObject != null && client.PlayerObject.IsSpawned)
+                {
+                    client.PlayerObject.Despawn(true);
+                }
+            }
+        }
+
         // One-time (per Gameplay Scene Load, not per-frame) lookup - Spawn Points live in the
         // Gameplay Scene itself, so a serialized reference from this persistent
         // (DontDestroyOnLoad) component would not survive across the Menu -> Gameplay Scene

@@ -42,6 +42,19 @@ namespace Domino.Menu
 
         private void Start()
         {
+            // Step 10B (Section 29): a Gameplay Pause Menu / SUCCESS Result "Stage Select"
+            // action sets this before loading MainMenu, so the Player lands back on Stage
+            // Select directly instead of Title. Consumed once - an ordinary Title return (or a
+            // fresh MainMenu Start with nothing special set) leaves this null and falls through
+            // to the original default.
+            if (GameSessionContext.ReturnDestination.HasValue)
+            {
+                MenuState destination = GameSessionContext.ReturnDestination.Value;
+                GameSessionContext.ReturnDestination = null;
+                ShowState(destination, pushHistory: false);
+                return;
+            }
+
             ShowState(MenuState.Title, pushHistory: false);
         }
 

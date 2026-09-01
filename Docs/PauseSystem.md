@@ -1,6 +1,6 @@
-# PauseSystem(Pause Menu / Restart)
+# PauseSystem(Pause Menu / Restart / Navigation / Result Actions)
 
-Step 10Aで追加した、Gameplay中のPause機能について記載します。Gameplay進行(BUILDING/READY/RUNNING/SUCCESS/FAILED)自体は`GameFlow.md`、BUILD TIMEの詳細計算は`ChallengeTimer.md`を参照してください。Stage Select/Titleへのナビゲーション、SUCCESS ResultへのStage Select/Titleボタン追加はStep 10Bの範囲です(本ドキュメントでは扱いません)。
+Step 10Aで追加した、Gameplay中のPause機能について記載します。Gameplay進行(BUILDING/READY/RUNNING/SUCCESS/FAILED)自体は`GameFlow.md`、BUILD TIMEの詳細計算は`ChallengeTimer.md`を参照してください。Step 10BでPause Menu / SUCCESS ResultにStage Select・Return to Titleを追加しました(第9章)。Scene遷移・Online Session・MenuState等、Menu側の詳しい仕組みは`MenuFlow.md`「10. Gameplay → MainMenu Navigation」を参照してください。
 
 ---
 
@@ -200,7 +200,7 @@ bool isLocalPlacing = placement != null && placement.IsPlacing;
 
 `GameplayHUD.prefab`に、既存のBuildingPanel/ReadyPanel等と同じCanvas配下へ2つのPanelを追加しました(UGUI + TextMeshPro、既存パターンを踏襲)。
 
-- **PausePanel**: `PAUSED`ラベル + `Resume (Esc)`ボタン + `Restart`ボタン(Step 10B で Stage Select / Return to Title ボタンを追加予定)
+- **PausePanel**: `PAUSED`ラベル + `Resume (Esc)`ボタン + `Restart`ボタン + `Stage Select`/`Return to Title`ボタン(後者2つはStep 10Bで追加、第9章)
 - **ConfirmationPanel**: 汎用の確認ダイアログ。メッセージ文言 + `Yes`/`No`ボタン。Actionごとに文言を差し替える汎用設計(`ShowConfirmation(string message, PendingConfirmAction action)`)
 
 表示優先順位(Confirmation > Pause > 通常HUD)は、PausePanelとConfirmationPanelを排他的に切り替える(同時表示しない)ことで単純に実現しています。「No」はConfirmationを閉じてPause Menuへ戻るだけで、Gameplay State(Phase/BUILD TIME/Domino等)には一切触れません(実機確認済み)。
@@ -222,7 +222,51 @@ Restart自体は`Confirmation Dialog`(第7章)を経由します(「Restart the 
 - **UIボタン疎通**: Resume/Restart/Confirm Yes/Confirm NoのすべてをUnity UIの`ExecuteEvents`経由の疑似Clickで検証し、対応するRPC/State変更が正しく発火することを確認(`Time.timeScale == 0`の間も含む)
 - Console: 上記すべてのテストを通じてProject由来のError/Warning 0件
 
+---
+
+## 9. Pause Menu / SUCCESS Result のNavigation(Step 10B)
+
+Pause Menuに`Stage Select`・`Return to Title`ボタンを追加し(既存の`Resume`/`Restart`と合わせて4ボタン)、SUCCESS Resultにも同じ2ボタンを追加しました(既存の`Retry`ボタンは`Retry (R)`とラベルを変更し、Keyboard ShortcutをPlayerから見て分かるようにしています)。実際のScene遷移・Session取り扱いのロジックは`GameplayNavigationController`(SampleScene側、新規)が担い、`GameplayHUD`はUIとConfirmation Dialogの表示・呼び出しのみを行います(Retry/Restartと同じ役割分担)。
+
+### Confirmationの有無(Section 15-17, 40-42)
+
+| 操作 | Pause Menu | SUCCESS Result |
+|---|---|---|
+| Retry | - | 不要(既存、Step 8.5から無変更) |
+| Restart | 必要(第8章) | - (Pause Menu限定) |
+| Stage Select | 必要 | **不要** |
+| Return to Title(Single Player) | 必要 | **不要** |
+| Return to Title(Online) | 必要 | 必要 |
+
+Confirmation Dialogの汎用実装(第7章)を`PendingConfirmAction`列挙にStageSelect/Titleを追加する形でそのまま再利用しています。Title確認時のメッセージ文言はSingle Player/Onlineで異なります(Section 17)。Stage Select確認時の文言は両者共通です(Section 16)。
+
+### Online Stage SelectのHost-only表示(Section 28, 40)
+
+Pause Menu・SUCCESS Resultどちらの`Stage Select`ボタンも、`NetworkManager.Singleton.IsHost`(Single Playerの場合は常にtrue)に応じて`interactable`とラベル文言(`"Stage Select"` / `"Stage Select (Host Only)"`)を毎フレーム更新しています。ClientのUI上でも「押せない理由」が文言で分かるようにする、という要件をこの1行のラベル切り替えで満たしています。
+
+### 実機確認済み(Runtime Test、Step 10B)
+
+- **Single Player Stage Select Return**: Pause → Stage Select → Confirm Yes → `NetworkManager.Shutdown()` → MainMenu → **Stage Selectへ直接遷移**(Titleを経由しない)ことを確認。続けて同じMainMenuからもう一度Single Playerを開始し、正常にGameplayへ入れることも確認
+- **Single Player Return to Title**: Pause → Return to Title → Confirm Yes → Shutdown → MainMenu → **Title**へ遷移することを確認
+- **Online Stage Select Return(Host自身の1接続によるシミュレーション)**: Pause → Stage Select → Confirm Yes → `NetworkManager.IsListening`が`true`のまま(Session/Relay接続を維持)MainMenuへ遷移し、`OnlineSessionController`が静的に保持していた`ISession`参照を正しく再利用してRoom/Stage Select UIを復元することを確認。Gameplay Player ObjectがMainMenuに残っていないこと(`ConnectedClients[0].PlayerObject == null`)も確認
+- **Online Return to Title(Host自身)**: Pause → Return to Title → Confirm Yes → Session Leave + Shutdown → MainMenu → Title、`GameSessionContext.IsOnline`が正しく`false`に戻ることを確認
+- **SUCCESS Result → Stage Select(Confirmationなし)**: Single PlayerでPhaseをSUCCESSにした状態からStage Selectボタンをクリックし、確認ダイアログを経由せず直接MainMenuのStage Selectへ遷移することを確認
+- **SUCCESS Result → Return to Title(Single Player, Confirmationなし)**: 同様にTitleボタンをクリックし、確認ダイアログなしで直接Titleへ遷移することを確認
+- **Confirmation Cancel(Stage Select / Title)**: それぞれ「No」でPause Menuへ復帰し、Scene/Phase/Network状態が一切変化しないことを確認
+- Console: 上記すべてのテストを通じてProject由来のError/Warning 0件
+
+### 発見・修正したバグ(このStep内)
+
+- **`NetworkSessionState`はGameplay中に存在しない**: 当初、Gameplay側から直接`NetworkSessionState.Instance?.HostReturnToStageSelect()`を呼ぶ設計にしていましたが、`NetworkSessionState`は`NetworkManager`と異なり`DontDestroyOnLoad`されておらず、MainMenuを離れた時点で破棄されていることが実機検証で判明しました(`Instance`が常にnullなため、呼び出しが無言で失敗)。`GameSessionContext.PendingHostReturnToStageSelect`という静的flagを介し、MainMenu再ロード後に新しくSpawnする`NetworkSessionState`自身の`OnNetworkSpawn()`でPhase遷移を適用する方式に変更しました。詳細と実際のSequenceは`MenuFlow.md`「10. Gameplay → MainMenu Navigation」を参照してください
+
 ### 未確認事項
+
+- 実際の2台のClientによるOnline Stage Select Return / Return to Titleの直接End-to-End確認(既存の制約と同じ、同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難なため、Host自身の1接続のみで検証)。開発者ご自身での実機確認を推奨します
+- Online Host-only Stage Selectボタンが実際にClient側で `interactable=false` / "Host Only" 表示になることの直接確認(実際のClient roleでの接続が必要なため、コードロジックの確認に留まっています。`!GameSessionContext.IsOnline || NetworkManager.Singleton.IsHost`という単純な式のため、既存のOnline Room/Stage Select Panelで同種の判定(`_session.IsHost`ベース)が正しく機能してきた実績から、動作することを確信しています)
+
+---
+
+## 10. Pause関連の未確認事項(Step 10A由来)
 
 - 実際の2台のClientによるOnline Global Pauseの直接確認(既存のStep 9系ドキュメントと同じ制約 - 同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難なため、Single Player/Host単独接続でのみ検証)。アーキテクチャ自体はGameFlowManager/NetworkSessionStateと同じScene-placed NetworkObjectパターンのため、既存のOnline機能と同様に動作すると判断していますが、開発者ご自身での実機確認を推奨します
 - Escapeキーの実際のキー押下シミュレーションによるEnd-to-End確認は、本環境ではキー入力イベントの実フレーム反映タイミングを外部ツールから制御できず断念しました(Button ClickはExecuteEvents経由で確認済み)。`HandlePauseKey()`自体のロジックはコードレビューと、R-key(既存のRetry Shortcut、同じ`Keyboard.current`ポーリングパターン)がこれまで問題なく機能してきた実績から、動作することを確信しています

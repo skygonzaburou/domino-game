@@ -9,5 +9,26 @@ namespace Domino.Menu
     {
         public static int SelectedStageId { get; set; } = -1;
         public static bool IsOnline { get; set; }
+
+        // Step 10B (Section 29): consumed once by MainMenuController.Start() to skip Title and
+        // land directly on the correct Panel when returning from Gameplay (Pause Menu / SUCCESS
+        // Result "Stage Select"). Left null for an ordinary Title return - MainMenuController
+        // already defaults to Title when this is unset.
+        public static MenuState? ReturnDestination { get; set; }
+
+        // Step 10B (Section 33/34/42): set by Gameplay's "Return to Title" before Shutdown() so
+        // the freshly-loaded MainMenu's OnlineSessionController knows to actually leave the
+        // Unity Gaming Services Session (LeaveAsync) using its rehydrated static Session
+        // reference, instead of treating this as a brand new visit to the Menu.
+        public static bool PendingLeaveOnlineSession { get; set; }
+
+        // Step 10B (Section 26-27): set by Gameplay's "Stage Select" before the Network Scene
+        // Load. NetworkSessionState is a normal Scene-placed NetworkObject bound to MainMenu.unity
+        // (unlike NetworkManager, it is NOT DontDestroyOnLoad) - it does not exist at all while
+        // in Gameplay, so this Host-only intent cannot be applied directly from there. The fresh
+        // NetworkSessionState that spawns once MainMenu reloads reads and consumes this itself
+        // (OnNetworkSpawn) to move straight to StageSelect Phase instead of its usual Room
+        // default.
+        public static bool PendingHostReturnToStageSelect { get; set; }
     }
 }

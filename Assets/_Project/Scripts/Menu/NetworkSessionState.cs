@@ -34,6 +34,17 @@ namespace Domino.Menu
         {
             _phase.OnValueChanged += HandlePhaseChanged;
             _selectedStageId.OnValueChanged += HandleSelectedStageChanged;
+
+            // Step 10B (Section 26-27): this instance always spawns at its NetworkVariable
+            // default (Room) - a Host returning from Gameplay to Stage Select cannot have set
+            // Phase directly (the previous MainMenu's NetworkSessionState, and this one, are two
+            // different instances - see GameSessionContext.PendingHostReturnToStageSelect). Apply
+            // that intent here, once, as this fresh instance comes online.
+            if (IsServer && GameSessionContext.PendingHostReturnToStageSelect)
+            {
+                GameSessionContext.PendingHostReturnToStageSelect = false;
+                _phase.Value = SessionPhase.StageSelect;
+            }
         }
 
         public override void OnNetworkDespawn()

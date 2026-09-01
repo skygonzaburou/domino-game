@@ -101,7 +101,7 @@ Step 9より、Scene は `MainMenu.unity`(Build Index 0)と `SampleScene.unity`(
 
 ### SampleScene.unity(Gameplay Scene)
 
-Root GameObjectは次の11個です(Step 8Bで追加した`GameplayHUD`、Step 9.2で追加した`PlayerSpawnPoints`、Step 10Aで追加した`GameplayPauseManager`を含みます)。
+Root GameObjectは次の12個です(Step 8Bで追加した`GameplayHUD`、Step 9.2で追加した`PlayerSpawnPoints`、Step 10Aで追加した`GameplayPauseManager`、Step 10Bで追加した`GameplayNavigationController`を含みます)。
 
 | GameObject | 主なComponent | 役割 |
 |---|---|---|
@@ -112,6 +112,7 @@ Root GameObjectは次の11個です(Step 8Bで追加した`GameplayHUD`、Step 9
 | **DominoLine** | Transform のみ(空の親) | Step 3で追加。`Domino.prefab` のインスタンス20個(`Domino_00`〜`Domino_19`)をまとめる親。Playerのスポーン地点と重ならないよう原点から離れた位置に配置。**Step 4時点では非アクティブ化**してあります(削除はしていません。Step 3の検証内容は保持したまま、通常プレイの邪魔にならないようにするための措置) |
 | **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager`, `ChallengeTimer` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
 | **GameplayPauseManager**(Step 10A) | `NetworkObject`, `GameplayPauseManager` | Global PauseのServer Authoritative State(`NetworkVariable<bool>`)を持つScene-placed NetworkObject。`GameFlowManager`とは別GameObject(責務分離)。詳細は`PauseSystem.md`を参照 |
+| **GameplayNavigationController**(Step 10B) | `GameplayNavigationController` | Gameplay → MainMenuへの遷移(Pause MenuのStage Select/Return to Title、SUCCESS Resultの同機能)を担う、通常の(NetworkObjectではない)`MonoBehaviour`。詳細は`MenuFlow.md`「10. Gameplay → MainMenu Navigation」を参照 |
 | **GameFlowZones**(Step 6) | Transform のみ(空の親) | `StartArea` / `Checkpoint_01` / `Checkpoint_02` / `GoalArea` の4つのZoneインスタンスをまとめる親。実際のコース配置はStageごとに変わる想定で、詳細はStageAuthoring.mdを参照 |
 | **CameraPoints**(Step 7.6) | Transform のみ(空の親) | `OverviewCameraPoint` をまとめる親。RUNNING/SUCCESS/FAILED中のOverview Camera視点をStage側で設定するためのマーカー。詳細はStageAuthoring.md第9章を参照 |
 | **PlayerSpawnPoints**(Step 9.2) | Transform のみ(空の親) | `SpawnPoint_1`〜`SpawnPoint_4`(子Transform、Start Area内・互いに重ならない配置)をまとめる親。`GameplayPlayerSpawner`(MainMenu Scene側、後述)が`GameObject.Find("PlayerSpawnPoints")`でこのSceneロード後に検索し、接続Client順に(`clientIndex % 4`)割り当てる。`NetworkObject`は持たない、純粋なLocal配置マーカー。Step 10Aで、Restart/Retry時のPlayer再配置(`GameFlowManager.RepositionAllPlayersToSpawnPoints()`)にも同じ解決ロジックを再利用しています |

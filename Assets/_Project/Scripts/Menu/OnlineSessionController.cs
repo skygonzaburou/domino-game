@@ -47,7 +47,15 @@ namespace Domino.Menu
         [Header("Stage Resolution (Step 9C)")]
         [SerializeField] private StageCatalog catalog;
 
-        private ISession _session;
+        // Step 10B: static, not an instance field. This Canvas-based Controller is destroyed
+        // whenever the Gameplay Scene loads (MainMenu is not persistent - only the NetworkManager
+        // GameObject is, via NetworkBootstrap's DontDestroyOnLoad). A live Online Session must
+        // survive that round trip so a Host returning to Stage Select (Section 26: the Session
+        // itself must stay connected) - or any Player returning to Title (Section 33/34: needs
+        // to LeaveAsync the Session it actually joined) - has something to act on. Statics are
+        // not Scene-bound, so this persists for free across the Scene reload; Start()/OnDestroy()
+        // below handle re-subscribing/unsubscribing the instance-level event handlers around it.
+        private static ISession _session;
         private bool _servicesInitialized;
         private Coroutine _waitForSessionStateRoutine;
 
@@ -56,6 +64,61 @@ namespace Domino.Menu
         private void Awake()
         {
             Instance = this;
+        }
+
+        private void Start()
+        {
+            // Step 10B (Section 33/34/42): returning from Gameplay specifically to leave the
+            // Session (Title). Takes priority over plain rehydration below - there is nothing to
+            // restore UI for, we are about to leave.
+            if (GameSessionContext.PendingLeaveOnlineSession)
+            {
+                GameSessionContext.PendingLeaveOnlineSession = false;
+                _ = LeaveSessionAsync();
+                return;
+            }
+
+            // Step 10B (Section 26): returning from Gameplay to Stage Select with the Session
+            // still alive (Online, Host-only action) - re-attach this fresh instance's UI/event
+            // handling to the Session that already exists, instead of creating/joining a new one.
+            if (_session != null)
+            {
+                RehydrateSession();
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+
+            // Defensive unsubscribe (Step 10B): without this, an old (destroyed) instance's
+            // RefreshRoomUI()/HandleSessionStateChanged() would still be invoked by the
+            // Session's events (event subscriptions keep the delegate target alive/reachable
+            // regardless of Unity's own Destroy()), throwing once they touch any already-
+            // destroyed UI reference. LeaveSessionAsync() already does this on an intentional
+            // Leave; this covers every other way this instance can go away (Scene transition).
+            if (_session != null)
+            {
+                _session.Changed -= RefreshRoomUI;
+                _session.StateChanged -= HandleSessionStateChanged;
+            }
+            if (NetworkSessionState.Instance != null)
+            {
+                NetworkSessionState.Instance.PhaseChanged -= HandlePhaseChanged;
+            }
+        }
+
+        // Step 10B: shared by OnSessionJoinedOrCreated() (a brand new Create/Join) and Start()'s
+        // rehydration path (returning from Gameplay to Stage Select) - both need the exact same
+        // event wiring and initial UI refresh, just from a different starting point.
+        private void RehydrateSession()
+        {
+            _session.Changed += RefreshRoomUI;
+            _session.StateChanged += HandleSessionStateChanged;
+            RefreshRoomUI();
+
+            if (_waitForSessionStateRoutine != null) StopCoroutine(_waitForSessionStateRoutine);
+            _waitForSessionStateRoutine = StartCoroutine(WaitForNetworkSessionStateAndSubscribe());
         }
 
         // Must be set before Create/JoinSessionAsync triggers StartHost()/StartClient()
@@ -222,15 +285,8 @@ namespace Domino.Menu
         private void OnSessionJoinedOrCreated()
         {
             GameSessionContext.IsOnline = true;
-
-            _session.Changed += RefreshRoomUI;
-            _session.StateChanged += HandleSessionStateChanged;
-
             MainMenuController.Instance.ShowState(MenuState.OnlineRoom);
-            RefreshRoomUI();
-
-            if (_waitForSessionStateRoutine != null) StopCoroutine(_waitForSessionStateRoutine);
-            _waitForSessionStateRoutine = StartCoroutine(WaitForNetworkSessionStateAndSubscribe());
+            RehydrateSession();
         }
 
         // The Host's in-Scene NetworkSessionState spawns synchronously as part of StartHost()

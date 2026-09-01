@@ -1128,6 +1128,53 @@ Host自身のPlayer(Single Player)での操作、および直接のMethod呼び�
 
 ---
 
+## Step 10B: Stage Select / Title Navigation / Result Actions
+
+Step 10A(Pause State / Pause Menu / Restart)完了・Commit後、続けて実装したStep 10Bです。Pause MenuからのStage Select/Return to Titleナビゲーション、SUCCESS ResultへのStage Select/Return to Titleボタン追加、および両者に必要なConfirmation/Host-only表示を実装しました。既存のGameplay/Networking/Menu Freezeリスト(Step 10Aで確認したPause/Restart機構含む)には、本Stepに必要な最小限の変更以外、一切手を加えていません。
+
+### 実装済み
+
+- `GameSessionContext.cs`に`ReturnDestination`(`MenuState?`)・`PendingLeaveOnlineSession`(`bool`)・`PendingHostReturnToStageSelect`(`bool`)の3つの静的flagを追加。いずれもScene非依存で生存するstatic dataという既存の設計方針(`SelectedStageId`/`IsOnline`と同じ)をそのまま踏襲
+- `GameplayNavigationController.cs`(新規, `Domino.Menu`名前空間, 通常の`MonoBehaviour`)を作成し、`SampleScene`に新規GameObjectとして配置。`RequestReturnToStageSelect()`(Online: Host-only、Session/Network維持のままNGO Scene Managementで遷移 / Single Player: Local Host Shutdown)と`RequestReturnToTitle()`(Single/Online/Host/Client共通、`NetworkManager.Shutdown()`のみ呼び、実際のScene Loadは下記のWatchdogに一本化)を提供
+- **`NetworkManager.OnClientStopped`によるWatchdog**を`GameplayNavigationController`に実装。自分の意図的なShutdown(Title Button)、Hostが先にTitleへ抜けたことによる他Clientの意図しない切断(Section 44/56)のどちらでも、同じ1箇所で安全にMainMenuへのScene Loadを行う設計に統一
+- `GameplayPlayerSpawner.cs`に`DespawnAllGameplayPlayers()`を追加(Section 31)。Online Stage Select Return時、Gameplay PlayerがMainMenuへ生き残ってStep 9.2以前の落下バグが再発しないよう、Scene遷移前に明示的にDespawnする
+- `OnlineSessionController.cs`を変更: `ISession _session`をinstance fieldからstatic fieldへ変更(Canvas破棄をまたいで生存させるため)。`RehydrateSession()`(イベント再購読+UI再構築)を追加し、`OnSessionJoinedOrCreated()`(新規Create/Join)とStage Select Returnからの復帰の両方で共有。`OnDestroy()`でイベント購読を確実に解除(stale instanceがEventで誤って呼ばれることを防止)。`Start()`で`PendingLeaveOnlineSession`を検出したらLeaveAsyncを実行するよう変更
+- `MainMenuController.cs`の`Start()`を変更: `GameSessionContext.ReturnDestination`が設定されていれば、Titleを経由せずそのPanelを直接表示するよう変更(Section 29)
+- `NetworkSessionState.cs`の`OnNetworkSpawn()`を変更: `GameSessionContext.PendingHostReturnToStageSelect`を検出したら、この(新しくSpawnした)インスタンス自身のPhaseをStageSelectへ直接設定するよう変更(下記「発見・修正したバグ」参照)
+- `GameplayHUD.cs`を拡張: Pause Menuに`Stage Select`/`Return to Title`ボタン(Confirmation経由)、SUCCESS Resultに`Stage Select`/`Return to Title`ボタン(Single PlayerはConfirmationなし、OnlineはConfirmationあり)を追加。既存の`Retry`ボタンは`Retry (R)`とラベル変更(Section 38)。Online Host-only判定(`!GameSessionContext.IsOnline || NetworkManager.Singleton.IsHost`)による`interactable`/ラベル切り替えをPause・Result両方のStage Selectボタンに適用
+- `GameplayHUD.prefab`にPause Panel用2ボタン・Result Action Container用2ボタンの新規UI(UGUI + TextMeshPro、Step 10Aと同じ手法)を追加
+
+### 発見・修正したバグ(このStep内)
+
+- **`NetworkSessionState`はGameplay中に存在しない**: 当初、`GameplayNavigationController.RequestReturnToStageSelect()`から直接`NetworkSessionState.Instance?.HostReturnToStageSelect()`を呼ぶ設計で実装しましたが、実機検証で「Phaseが全く変わらず、MainMenu復帰後もRoomのまま」という結果になりました。原因は、`NetworkSessionState`が`NetworkManager`と異なり`DontDestroyOnLoad`されていない、通常のScene-placed NetworkObject(MainMenu.unity束縛)であり、Gameplay Sceneにいる間は既に破棄されて`Instance == null`になっているためでした(`?.`により無言で失敗)。`GameSessionContext.PendingHostReturnToStageSelect`という静的flagを介し、MainMenu再ロード後に新しくSpawnする`NetworkSessionState`自身の`OnNetworkSpawn()`でPhase遷移を適用する方式に変更し、解消しました
+
+### 動作確認済み(Runtime Test)
+
+Host自身のPlayer(Single Player)での操作、Unity Gaming Servicesへの実際のRelay Session作成(Online、Host自身の1接続によるシミュレーション)、およびUnity UIの`ExecuteEvents`による疑似Buttonクリックを組み合わせ、Play Modeで確認しました。
+
+- **Single Player Stage Select Return**: Pause → Stage Select → Confirm Yes → `NetworkManager.Shutdown()` → MainMenu → Stage Selectへ直接遷移(Titleを経由しない)ことを確認。続けて同じMainMenuから再度Single Playerを開始し、Playerが正しくSpawn Pointに現れ正常にGameplayできることも確認
+- **Single Player Return to Title**: Pause → Return to Title → Confirm Yes → Shutdown → MainMenu → Titleへ遷移することを確認
+- **Online Stage Select Return**: 実際にUnity Relayへ接続したSession上で、Pause → Stage Select → Confirm Yes → `NetworkManager.IsListening == true`のまま(Session/Relay接続を維持)MainMenuへ遷移し、`OnlineSessionController`が静的に保持していた`ISession`参照を再利用してRoom/Stage Select UIを正しく復元することを確認。Gameplay Player ObjectがMainMenuに残っていないこと(`ConnectedClients[0].PlayerObject == null`、Player-タグ付きオブジェクト0個)も確認。続けて同じSessionでもう一度Stage選択→Start Gameを実行し、正常にGameplayへ戻れることも確認
+- **Online Return to Title(Host自身)**: Pause → Return to Title → Confirm Yes → Session Leave + Shutdown → MainMenu → Title、`GameSessionContext.IsOnline`が正しく`false`に戻ることを確認
+- **SUCCESS Result → Stage Select(Confirmationなし)**: Single PlayerでPhaseをSUCCESSにした状態からStage Selectボタンをクリックし、確認ダイアログを経由せず直接MainMenuのStage Selectへ遷移することを確認
+- **SUCCESS Result → Return to Title(Single Player, Confirmationなし)**: 同様にTitleボタンをクリックし、確認ダイアログなしで直接Titleへ遷移することを確認
+- **Confirmation Cancel(Pause MenuのStage Select / Title)**: それぞれ「No」でPause Menuへ復帰し、Scene/Phase/Network状態が一切変化しないことを確認(Restart同様、Stage Select/Titleでも成立することを確認)
+- **既存Gameplay Regression**: Placement・BUILD TIME開始が本Step全体を通じて正常動作することを確認
+- Console: 上記すべてのテストを通じてProject由来のError/Warning 0件
+
+### 未実装/確認できなかった事項
+
+- **実際の2台のClientによるOnline Stage Select Return / Return to TitleのEnd-to-End確認**: 既存のStep 9系ドキュメントと同じ制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、Host自身の1接続によるシミュレーションのみで検証しました。開発者ご自身での実機確認を推奨します
+- **Online Client視点でのHost-only Stage Selectボタン表示**: 実際にClient roleで接続した状態での`interactable=false`/`"Stage Select (Host Only)"`表示の直接確認は、上記と同じ制約により未実施です。判定式自体(`!GameSessionContext.IsOnline || NetworkManager.Singleton.IsHost`)は単純で、既存のOnline Room/Stage Select Panelの同種のHost-only判定(Step 9C)が問題なく機能してきた実績があります
+- **Section 44(Pause中のHost Disconnect)・Section 56(Online Host Title Test、Client視点)の直接End-to-End確認**: `NetworkManager.OnClientStopped`によるWatchdog機構自体は実装・コードレビュー済みですが、実際に2台目のClientが「Hostが切断したことを検知してMainMenuへ戻る」動作を直接観測することは、同じ2-Client制約により未実施です
+
+### 将来確認が必要な事項
+
+- 実際の2人以上でのOnline Stage Select Return / Return to Title確認(上記参照、最優先)
+- Online Client視点でのHost-only Stage Selectボタン表示確認
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

@@ -154,3 +154,66 @@ CLI引数(`-host`/`-client`)による経路(`StartFromCommandLineArgs()`)はStep
 Online Play(Create Room / Join Room / Join Code / Online Room / Player Count / Host-only Online Stage Select / Selected Stage同期 / Network Scene Transition / Late Join禁止)はStep 9B・9Cで実装済みです。詳細は`Docs/OnlineSession.md`を参照してください。
 
 Step 9の対象外(Friend機能・Random Match・Public Room List・Matchmaking・Host Migration・Reconnect・Spectator Join・Ranking等)は今後の別Stepの対象です。
+
+---
+
+## 10. Gameplay → MainMenu Navigation(Step 10B)
+
+Step 10Bで、Gameplay(Pause Menu / SUCCESS Result)からMainMenuへ戻る経路を追加しました。Pause自体の仕組みは`PauseSystem.md`を参照してください。本章はMenu側の状態(Scene遷移・MenuState・Online Session)がどう絡むかに絞って説明します。
+
+### 2つの戻り方
+
+```text
+Stage Select(Online Host-only 例外あり)
+  Session/Networkを維持したまま、MainMenuへ戻ってStage Selectを直接表示
+  Single Playerでは実質Titleと同じ(維持すべきSessionが無いため)
+
+Return to Title
+  Single Player: Local Host Shutdown
+  Online: Session を実際にLeave(Host/Client両方)
+  → いずれもNetwork Shutdown後、MainMenuはTitleから開始
+```
+
+いずれも実装は`GameplayNavigationController`(SampleScene側)が担い、GameplayHUDのボタン/Confirmation Dialogから呼ばれます。
+
+### NetworkSessionStateはGameplay中は存在しない(重要な設計上の制約)
+
+`NetworkSessionState`は`NetworkManager`と異なり`DontDestroyOnLoad`されていません(第7章)。そのためGameplay Scene(SampleScene)にいる間、`NetworkSessionState.Instance`は**常にnull**です。
+
+Step 10Bの実装当初、Gameplay側から直接`NetworkSessionState.Instance?.HostReturnToStageSelect()`のようなメソッドを呼ぼうとしましたが、これは`Instance`がnullのため常に無言で失敗する(何も起きない)ことが実機検証で判明しました。代わりに、`GameSessionContext.PendingHostReturnToStageSelect`という静的flagを使う方式に変更しています。
+
+```mermaid
+sequenceDiagram
+    participant GP as GameplayHUD (SampleScene)
+    participant NC as GameplayNavigationController (SampleScene)
+    participant Ctx as GameSessionContext (static, Scene非依存)
+    participant NSS as NetworkSessionState (MainMenu.unity, Scene-placed)
+
+    GP->>NC: RequestReturnToStageSelect() (Host-only)
+    NC->>Ctx: PendingHostReturnToStageSelect = true
+    NC->>NC: NetworkManager.SceneManager.LoadScene("MainMenu", Single)
+    Note over NSS: 旧MainMenuのNetworkSessionStateは既に破棄済み。<br/>これは新しいSceneロードで新規Spawnされる別インスタンス
+    NSS->>NSS: OnNetworkSpawn(): PendingHostReturnToStageSelect を確認・消費
+    NSS->>NSS: Phase: (default: Room) → StageSelect
+```
+
+`GameSessionContext`(第6章のStage Catalog文脈で既出、静的クラス・Scene非依存で自動的に生存)がこの橋渡し役です。同様の理由で、`MainMenuController.Start()`がTitleではなく直接目的のPanelを表示するための`GameSessionContext.ReturnDestination`(`MenuState?`)も同じ仕組みを使っています。
+
+### Online Session(`ISession`)もGameplay中は保持先が無い
+
+`OnlineSessionController`もMainMenu Sceneの`Canvas`上にあり、非永続(Gameplay中は破棄済み)です。Join Code・Player Count等を保持する`ISession`参照は、Step 10Bで**instance fieldからstatic fieldへ変更**し、Scene再ロードをまたいで生存するようにしました。
+
+- **Stage Select Return**: MainMenu再ロード後、新しい`OnlineSessionController`インスタンスが`Start()`でこのstaticな`_session`を検出し、`Changed`/`StateChanged`イベントを再購読して(`RehydrateSession()`)、Room/Stage Select UIを正しく復元します。新しいSessionをCreate/Joinし直すわけではありません。
+- **Return to Title**: `GameSessionContext.PendingLeaveOnlineSession`フラグを使い、新しい`OnlineSessionController`インスタンスの`Start()`が既存の`LeaveSessionAsync()`(Step 9Bから無変更のTimeout Guard付き実装)を呼び出し、実際にSessionを離脱します。
+
+### Gameplay Player Cleanup(Section 31)
+
+`NetworkManager.SceneManager.LoadScene(..., LoadSceneMode.Single)`は、Scene-placed NetworkObject(`GameFlowManager`等)は自動的に破棄しますが、動的にSpawnされたPlayer NetworkObjectは**自動では破棄しません**。これはStep 9.2で修正したRoot Cause(Player落下バグ)と全く同じ性質の罠で、今回はGameplay→MainMenu方向で再発しうるため、`GameplayPlayerSpawner.DespawnAllGameplayPlayers()`(Step 10Bで追加、Server-only)をStage Select Return直前に明示的に呼んでいます。Return to Title(Shutdown経由)はNGO自身のSession Teardownが全NetworkObjectを片付けるため、この明示的Despawnは不要です(Shutdown()のみで十分)。
+
+### Escapeキー/PauseとSceneTransitionの分離
+
+`GameplayNavigationController`はNGOの`NetworkManager.OnClientStopped`イベントを購読し、Shutdown()経由の遷移(Single Playerの両操作、Onlineの両ロールのReturn to Title)は**すべて同じ1箇所**でSceneをLoadします(`HandleClientStopped`)。これにより、「自分から明示的にLeaveした」ケースと「Hostが切断して意図せず切られた」ケース(Section 44/56)を、別々のコードパスを書かずに同じ結果へ収束させています。Stage Select Return(Onlineのみ)はSession/Networkを維持したままの遷移のため、この経路は使わず`NetworkManager.SceneManager.LoadScene()`を直接呼びます。
+
+### 未確認事項
+
+実際の2台のClientによるOnline Stage Select Return / Title Returnの直接End-to-End確認は、既存のStep 9系ドキュメントと同じ制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、Host自身の1接続によるシミュレーションのみで検証しています。詳細な実機確認結果は`Docs/ImplementationStatus.md`のStep 10Bエントリを参照してください。
