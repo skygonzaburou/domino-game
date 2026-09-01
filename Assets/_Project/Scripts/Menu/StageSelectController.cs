@@ -159,6 +159,12 @@ namespace Domino.Menu
 
             if (!networkManager.IsListening)
             {
+                // Same CreatePlayerObject = false deferral Online uses (Step 9.2) - without
+                // this, the Gameplay Player auto-spawns the instant StartHost() connects (while
+                // still in MainMenu, no Ground) and falls indefinitely; GameplayPlayerSpawner
+                // creates it properly once SampleScene has actually finished loading.
+                OnlineSessionController.SetupConnectionApproval();
+
                 bool started = networkManager.StartHost();
                 if (!started)
                 {

@@ -1028,6 +1028,61 @@ Step 9.1の修正により、これまでのStepで必要だった「検証の�
 
 ---
 
+## Step 9.2: Gameplay Player Spawn Lifecycle Fix
+
+Step 9.1完了後、開発者ご自身が実際に2人でOnline Playを確認し、Room→Join→Stage Select→Start Game→Scene遷移・Placement/BUILD TIME同期までは正常動作を確認された一方、「Gameplay Scene突入後、Host/Client両方のPlayerがずっと下へ落ち続け、CameraもPlayerを追いかけるためStage/Groundが画面上に見えなくなる」というバグ報告を受け、その修正のみを行いました。Step 9で実装したOnline Architecture(Relay/Session/Create Room/Join Room/Selected Stage同期/Late Join Lock)・Gameplay側の既存機能(Placement/BUILD TIME/READY/Failure Detection/SUCCESS/Retry/Domino Physics)・Menu Flow(Title/Mode Select/Online Select/Room/Stage Select、Step 9.1から変更なし)には、Player Spawnのタイミング以外、一切変更を加えていません。
+
+### Root Cause(実測により特定)
+
+Play Mode上での直接測定により、以下を確認しました。
+
+- **Player Y座標の実測**: Online Room滞在中(まだ`MainMenu.unity`がActive Scene)の時点で、既にPlayerのY座標が`-149`まで落下していることを確認。Gameplay Scene(`SampleScene`)のLoad完了直後には`-937`までさらに落下
+- **同一NetworkObjectであることの確認**: Scene遷移前後を通じてPlayer-タグ付きオブジェクトの数は常に1個のままであり、新規にもう1個生成されたわけではないことを確認(重複Spawnではない)
+- **コード上の原因**: `OnlineSessionController.HandleConnectionApproval()`が`response.CreatePlayerObject = true`を無条件に設定していたため、NGOは**接続した瞬間に**(まだGroundの存在しない`MainMenu.unity`がActive Sceneの間に)`NetworkConfig.PlayerPrefab`(`Player.prefab`)を自動Spawnしていました。Rigidbodyは通常の重力・非Kinematicで生成されるため、そのまま落下を開始します。NGOはScene遷移時にPlayerのNetworkObjectを自動破棄しないため、**同一のPlayerがそのままMenu→Gameplayの`LoadSceneMode.Single`遷移を跨いで持ち越され**、Gameplay Scene側でも誰にも再配置されないまま落下を継続していました
+- **Scene自体の健全性確認**: 上記の原因特定と並行し、`SampleScene`自体(`Ground`/`StartArea`/`OverviewCameraPoint`の存在、`GameFlowManager.CurrentPhase`の初期値)が正しくLoadされていることを確認し、Scene Load自体の失敗が原因である可能性を排除しました
+- **Single Player版でも同一の脆弱性が構造的に存在**: `StageSelectController.StartLocalHostAndLoadGameplay()`も同じ`StartHost()`→Connection Approval経路を通るため、理論上は同じバグに晒されていました。実際には症状が出ていなかった理由は、Single Playerでは`StartHost()`と`SceneManager.LoadScene()`がほぼ同一フレームで連続実行されるため、実時間としての落下猶予がほぼ0秒だったためです(Onlineでは、Room/Stage Select滞在中の数秒〜数分間、猶予が生じていました)。「たまたま気づかれなかった」だけで、コード上のリスクとしては存在していたため、修正はOnline/Single Player両方に統一して適用しました
+
+### Fix
+
+**Preferred Architecture**として、「Gameplay Playerは接続時点ではなく、Gameplay SceneのLoadが完了した時点で初めて存在する」設計に変更しました。詳細な実装(コード・Sequence)は`Networking.md`「24. Player Spawn Lifecycle」、Connection Approval側の変更は`OnlineSession.md`第9章、Player.prefab自体への影響(無し)は`PlayerSystem.md`を参照してください。要点のみ記載します。
+
+1. `OnlineSessionController.SetupConnectionApproval()`/`HandleConnectionApproval()`を`private instance`から`public static`/`private static`へ変更し、`response.CreatePlayerObject`を常に`false`に変更。Single Player側の`StageSelectController.StartLocalHostAndLoadGameplay()`も`StartHost()`直前にこの同じメソッドを呼ぶよう変更(コード重複を避け、Online/Single Playerで同一のApproval設定を共有)
+2. `GameplayPlayerSpawner.cs`(新規, `Domino.Networking`名前空間, 通常の`MonoBehaviour`)を作成し、`MainMenu.unity`の`NetworkManager` GameObjectに追加。NGOの`NetworkManager.SceneManager.OnLoadEventCompleted`(Server専用)を購読し、指定したGameplay Scene名(`SampleScene`)のLoadが完了したタイミングで、完了した各Clientにつき`NetworkObject.InstantiateAndSpawn(..., isPlayerObject: true, position: spawnPoint.position, ...)`を呼ぶ。`NetworkManager.OnServerStarted`経由で毎回のHost起動ごとに購読し直す(`-=`してから`+=`)ことで、同一Application内での複数回`StartHost()`(Leave→再Create、Single PlayerのRetry-into-a-new-session等)にも対応
+3. `SampleScene.unity`の`StartArea`内に`PlayerSpawnPoints`(空の親)+`SpawnPoint_1`〜`SpawnPoint_4`(子Transform、最大4人分、互いに重ならない配置)を新規追加。`GameplayPlayerSpawner`は`clientsCompleted`配列のIndexを`spawnPoints.Length`で割った剰余でSpawn Pointを決定論的に割り当てる(Clientが選ぶことはできない)
+
+### 動作確認済み(Runtime Test)
+
+- **Root Cause実測**: 上記の通り、修正前のコードでY座標推移(`-149`→`-937`)を実測し、原因を裏付け
+- **Single Player**: TITLE→START→TIME ATTACK→STAGE SELECT→Stage 1選択で、Playerが`SpawnPoint_1`(`-1, 0, -11`)に速度0で正しくSpawnし安定していること、Ground/Stageが画面上に見えること(Screenshotで視覚確認)、Placement・BUILD TIME開始が正常動作することを確認
+- **Online(Host自身の1接続によるシミュレーション)**: Room滞在中は`ConnectedClients[0].PlayerObject == null`(Player未Spawn)であることを確認。`HostTryStartGame(2)`(人数を2人分に見せかけたServer側Validationの直接検証、Step 9Cから続く手法)→Scene遷移後、`SpawnPoint_1`へ正しくSpawnし安定していること(Screenshotで視覚確認)、Placement・BUILD TIME開始が正常動作すること、SpawnされたPlayerのComponent構成(`Transform`/`Rigidbody`/`CapsuleCollider`/`PlayerStats`/`NetworkObject`/`PlayerMotor`/`NetworkTransform`/`NetworkRigidbody`/`PlacementController`/`ChallengeInput`/`PlayerPushController`)が全て揃っていることを確認
+- **Retry(In-place Reset)**: `GameFlowManager.TriggerFailure()`→`RetrySequence()`(Step 8.5から無変更のコード)実行後もPlayer-タグ付きオブジェクトが1個のまま(重複なし)、`SpawnPoint_1`へ正しく戻ることを確認。RetryはNGOレベルでの新規接続・新規Scene Loadを伴わないため`GameplayPlayerSpawner`は関与しない、という設計上の期待通りの結果でした
+- **複数回の`StartHost()`(再購読ロジックの検証)**: `NetworkManager.Shutdown()`→MainMenuへScene再Load→再度Single Playerを開始、という手順で2回目の`StartHost()`+Gameplay Scene Loadを発生させ、2回目でもPlayerが正しく1体だけSpawnされる(重複なし)ことを確認。`GameplayPlayerSpawner`の`OnServerStarted`再購読ロジックが複数回のHost起動サイクルに対して正しく機能することの実証です
+- Console: 上記すべてのテストを通じてError/Warning 0件
+
+### Regression
+
+- **Placement/BUILD TIME**: Single Player・Online(シミュレーション)双方で確認(上記)
+- **Retry**: In-place Resetが正しく機能することを確認(上記)。Domino Despawn・`ResetRunState()`・Timer Resetを含むRetry本体のロジック自体はStep 8.5から無変更
+- **Online Architecture(Relay/Session/Room/Stage Select/Late Join Lock)**: `HandleConnectionApproval()`のLate Join拒否ロジック(`response.Approved`側)・`NetworkSessionState`のPhase同期・Selected Stage同期はいずれも無変更。`CreatePlayerObject`の値のみを変更しています
+- **Menu Flow**: Title/Mode Select/Online Select/Room/Stage SelectのPanel遷移はStep 9.1から無変更。Play Mode終了後のMainMenu Canvas Panel状態(TitlePanelのみActive)を最終確認し、正しいことを確認した上でSceneを保存しました
+
+### Console
+
+最終確認時点でProject由来のError/Warning 0件。
+
+### 未実装/確認できなかった事項
+
+- **実際の2台のClientによるEnd-to-End確認**: Step 9・9.1から持ち越しの制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、Host自身の1接続によるシミュレーションのみで検証しました。開発者ご自身が既に2人でRoom〜Scene遷移までを確認されている状況を踏まえ、続く「Gameplay Scene突入後、両Playerが正しい位置にSpawnし落下しないこと」についても、開発者ご自身での再確認を推奨します
+- **4人接続時のSpawn Point割り当て**: 実際に4接続を同時に用意することが困難だったため、3人目・4人目が`SpawnPoint_3`/`SpawnPoint_4`に正しく割り当てられることは未検証です。コード上は`clientIndex % spawnPoints.Length`のロジックで対応済みです
+- **READY/RUNNING/FAILED/SUCCESSを含む完全なGameplay Loop**: 今回は`GameFlowManager.TriggerFailure()`/`RetrySequence()`をReflection経由で直接呼び出す形でRetry経路を検証しましたが、実際にDominoを配置してChain Reactionを起こし、Start→CP→Goalの正規経路でSUCCESSに到達する完全なEnd-to-Endの通し確認は今回のStepでは行っていません(Step 6/6.1/8.5で既に検証済みのロジック自体には手を加えていないため、Player Spawnタイミングの変更がこれらに影響する経路は無いと判断していますが、通し確認そのものは未実施です)
+
+### 将来確認が必要な事項
+
+- **実際の2人以上でのGameplay Scene突入後の確認**(上記参照、最優先)
+- 4人プレイ時のSpawn Point割り当て(上記参照)
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

@@ -1,0 +1,124 @@
+using System.Collections.Generic;
+using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace Domino.Networking
+{
+    // Lives on the persistent "NetworkManager" GameObject (same as NetworkBootstrap - Step 9.2).
+    //
+    // Root Cause this exists to fix: Connection Approval previously left CreatePlayerObject at
+    // its default (true), so NGO spawned each Player's NetworkObject the instant they connected
+    // - while still in MainMenu (Room/Stage Select), which has no Ground. With Rigidbody gravity
+    // active and nothing to land on, the Player fell continuously; the SAME NetworkObject then
+    // carried that fall straight through the Menu -> Gameplay Scene transition (confirmed live:
+    // Y = -149 while still in the Room, Y = -937 moments after the Gameplay Scene finished
+    // loading - one persistent object, never repositioned).
+    //
+    // Fix: Connection Approval (OnlineSessionController for Online, this class's own Awake for
+    // Single Player - see StageSelectController.StartLocalHostAndLoadGameplay) now always sets
+    // CreatePlayerObject = false, so no Gameplay Player exists at all until the Gameplay Scene
+    // has actually finished loading. This class listens for that completion
+    // (NetworkSceneManager.OnLoadEventCompleted, Server-only) and explicitly spawns one Player
+    // per completed Client at a Scene-authored Spawn Point inside Start Area.
+    [DefaultExecutionOrder(-100)]
+    public class GameplayPlayerSpawner : MonoBehaviour
+    {
+        [Tooltip("Player Spawnを行う対象のGameplay Scene名")]
+        [SerializeField] private string gameplaySceneName = "SampleScene";
+
+        [Tooltip("Gameplay Scene内でSpawn Pointの子Transformを探す、親GameObjectの名前")]
+        [SerializeField] private string spawnPointsContainerName = "PlayerSpawnPoints";
+
+        private void Start()
+        {
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.OnServerStarted += HandleServerStarted;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.OnServerStarted -= HandleServerStarted;
+                if (NetworkManager.Singleton.SceneManager != null)
+                {
+                    NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= HandleLoadEventCompleted;
+                }
+            }
+        }
+
+        // Re-subscribed fresh every time the Server (re)starts (Single Player Retry-into-a-new
+        // session, or Leave + Create a new Online Room both call StartHost() again later in the
+        // same Application lifetime) - the defensive -= first avoids double-firing if NGO ever
+        // reuses the same NetworkSceneManager instance across a Shutdown/StartHost cycle.
+        private void HandleServerStarted()
+        {
+            if (NetworkManager.Singleton == null || NetworkManager.Singleton.SceneManager == null) return;
+            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= HandleLoadEventCompleted;
+            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += HandleLoadEventCompleted;
+        }
+
+        // Late Join is already rejected server-side once the Session reaches StartingGame/InGame
+        // (Step 9C, OnlineSessionController.HandleConnectionApproval - unchanged) before this
+        // Scene Load even begins, so every currently-connected Client is exactly who needs a
+        // Gameplay Player and no one else ever will for this Attempt.
+        private void HandleLoadEventCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
+        {
+            if (!NetworkManager.Singleton.IsServer) return;
+            if (sceneName != gameplaySceneName) return;
+
+            GameObject prefab = NetworkManager.Singleton.NetworkConfig.PlayerPrefab;
+            if (prefab == null)
+            {
+                Debug.LogError("[GameplayPlayerSpawner] NetworkConfig.PlayerPrefab is not set - cannot spawn Gameplay Players.");
+                return;
+            }
+
+            Transform[] spawnPoints = ResolveSpawnPoints();
+
+            for (int i = 0; i < clientsCompleted.Count; i++)
+            {
+                ulong clientId = clientsCompleted[i];
+
+                // Defensive (section 16): never create a second Player Object for a Client that
+                // somehow already has one.
+                if (NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var client) && client.PlayerObject != null)
+                {
+                    continue;
+                }
+
+                Vector3 position = Vector3.zero;
+                Quaternion rotation = Quaternion.identity;
+                if (spawnPoints != null && spawnPoints.Length > 0)
+                {
+                    Transform point = spawnPoints[i % spawnPoints.Length];
+                    position = point.position;
+                    rotation = point.rotation;
+                }
+                else
+                {
+                    Debug.LogWarning("[GameplayPlayerSpawner] No Spawn Points found under '" + spawnPointsContainerName + "' - spawning at World Origin.");
+                }
+
+                NetworkObject.InstantiateAndSpawn(prefab, NetworkManager.Singleton, ownerClientId: clientId, isPlayerObject: true, position: position, rotation: rotation);
+            }
+        }
+
+        // One-time (per Gameplay Scene Load, not per-frame) lookup - Spawn Points live in the
+        // Gameplay Scene itself, so a serialized reference from this persistent
+        // (DontDestroyOnLoad) component would not survive across the Menu -> Gameplay Scene
+        // boundary.
+        private Transform[] ResolveSpawnPoints()
+        {
+            GameObject container = GameObject.Find(spawnPointsContainerName);
+            if (container == null) return null;
+
+            var points = new List<Transform>();
+            foreach (Transform child in container.transform) points.Add(child);
+            return points.ToArray();
+        }
+    }
+}

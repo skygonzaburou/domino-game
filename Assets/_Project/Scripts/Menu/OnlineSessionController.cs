@@ -61,26 +61,38 @@ namespace Domino.Menu
         // Must be set before Create/JoinSessionAsync triggers StartHost()/StartClient()
         // internally (Step 9C, section 40) - NetworkConfig.ConnectionApproval is read at
         // listen-start time, so this always runs from EnsureServicesInitializedInternal(),
-        // which every Create/Join path awaits first.
-        private void SetupConnectionApproval()
+        // which every Create/Join path awaits first. Also called directly (bypassing Unity
+        // Services entirely) by StageSelectController for the Single Player Local Host path
+        // (Step 9.2) - Single Player never touches Unity Gaming Services, but needs the exact
+        // same CreatePlayerObject = false deferral, for the exact same reason.
+        public static void SetupConnectionApproval()
         {
             if (NetworkManager.Singleton == null) return;
             NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
             NetworkManager.Singleton.ConnectionApprovalCallback = HandleConnectionApproval;
         }
 
-        // Server-only Rejection of new connections once the game has actually started (Step 9,
-        // section 40-41): Client UI hiding the Join button is not sufficient on its own - a
-        // Client bypassing the UI (or racing a Join against Start Game) must still be refused
-        // here. Allowed through Room and Stage Select (section 39) - only StartingGame/InGame
-        // reject.
-        private void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+        // Server-only. Two independent concerns share this single callback (Step 9.2):
+        //
+        // 1. Reject new connections once the game has actually started (Step 9C, section
+        //    40-41): Client UI hiding the Join button is not sufficient on its own - a Client
+        //    bypassing the UI (or racing a Join against Start Game) must still be refused here.
+        //    Allowed through Room and Stage Select (section 39) - only StartingGame/InGame
+        //    reject. For Single Player, NetworkSessionState.Phase never leaves Room (nothing
+        //    ever calls HostAdvanceToStageSelect/HostTryStartGame there), so this is always a
+        //    harmless no-op approval.
+        //
+        // 2. CreatePlayerObject = false, always (Root Cause fix, section 2-3): the Gameplay
+        //    Player must never auto-spawn at connection time - GameplayPlayerSpawner explicitly
+        //    creates it once the Gameplay Scene has actually finished loading, at a proper Spawn
+        //    Point, for both Single Player and Online alike.
+        private static void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
         {
             SessionPhase phase = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.Phase : SessionPhase.Room;
             bool gameStarted = phase == SessionPhase.StartingGame || phase == SessionPhase.InGame;
 
             response.Approved = !gameStarted;
-            response.CreatePlayerObject = true;
+            response.CreatePlayerObject = false;
             if (gameStarted)
             {
                 response.Reason = "This game has already started.";

@@ -427,3 +427,94 @@ sequenceDiagram
 ## 23. NetworkManagerのScene常駐先(Step 9)
 
 Step 9より、`NetworkManager`(および同居する`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)は、Gameplay Scene(`SampleScene.unity`)ではなく`MainMenu.unity`に常駐しています。`NetworkBootstrap.Awake()`の明示的な`DontDestroyOnLoad`により、`NetworkManager.SceneManager.LoadScene(..., LoadSceneMode.Single)`によるMenu→Gameplayの遷移を跨いでも同一インスタンスが生き続けます。本章より上のRPC/Authority/Timer Authority等の説明は「NetworkManagerがどのSceneにいるか」に依存しない内容のため変更していません。Scene構成そのものの詳細は`Architecture.md`「3. Scene構成」、Menu側のFlow詳細は`MenuFlow.md`を参照してください。
+
+---
+
+## 24. Player Spawn Lifecycle(Step 9.2)
+
+### Root Cause: なぜGameplay Playerが「MainMenuの中で」落ち続けたのか
+
+Step 9(Connection Approval導入)時点では、`NetworkManager.ConnectionApprovalCallback`が`response.CreatePlayerObject = true`を無条件に設定していました。NGOはこの値が`true`だと、**Client(Host自身含む)が接続した瞬間に**`NetworkConfig.PlayerPrefab`(=`Player.prefab`)を自動的にSpawnします。
+
+Step 9より、接続そのものはRoom/Stage Select中(まだ`MainMenu.unity`がActive Scene)に発生するため、この「接続=即Spawn」の挙動により、**Playerは`SampleScene`(Ground/StartAreaが存在するScene)へまだ遷移してすらいない時点で**Spawnされていました。`Player.prefab`のRigidbodyは通常の重力・非Kinematicで生成されるため、Ground無しの空間へ落下し続けます。さらにNGOはScene遷移時にPlayerのNetworkObjectを自動的に破棄しないため、**同一のNetworkObjectがそのままMenu→Gameplayの`LoadSceneMode.Single`遷移を跨いで持ち越され**、Gameplay Scene側でも(誰にも再配置されないまま)落下を継続していました。
+
+実測(Play Mode、Online Room滞在中とGameplay Scene Load直後):
+
+| タイミング | Player Y座標 |
+|---|---|
+| Room滞在中(まだMainMenu) | Y = -149 |
+| Gameplay Scene Load完了直後 | Y = -937 |
+
+**同一のNetworkObject**であり、新規にSpawnされたものではないことを確認済みです(Scene遷移前後でPlayer-タグ付きオブジェクトの数が常に1のまま)。
+
+### Fix: CreatePlayerObject = false + Scene Load完了後の明示的Spawn
+
+**Preferred Architecture**として、「Gameplay PlayerはGameplay SceneのLoadが完了するまで一切存在しない」設計に変更しました。Room/Stage Select中はConnected Client ID/Player Count/Session State/Selected Stageのみを扱い、Player Object自体を必要としません。
+
+1. **接続時: 常にCreatePlayerObject = false**
+
+```csharp
+// OnlineSessionController.SetupConnectionApproval() (Online/Single Player共通)
+NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
+NetworkManager.Singleton.ConnectionApprovalCallback = HandleConnectionApproval;
+```
+
+```csharp
+private static void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+{
+    SessionPhase phase = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.Phase : SessionPhase.Room;
+    bool gameStarted = phase == SessionPhase.StartingGame || phase == SessionPhase.InGame;
+
+    response.Approved = !gameStarted;      // Late Join拒否(第9章、Step 9C、変更なし)
+    response.CreatePlayerObject = false;   // Step 9.2: 常にfalse。接続時点でのPlayer自動Spawnをやめる
+    if (gameStarted) response.Reason = "This game has already started.";
+}
+```
+
+Online(`OnlineSessionController.SetupConnectionApproval()`)・Single Player(`StageSelectController.StartLocalHostAndLoadGameplay()`が`StartHost()`直前に同じメソッドを呼ぶ)の両方が、必ずこの同一Callbackを経由します。Single PlayerもHost/Client方式のアーキテクチャを流用しているため(Networking.md第4章)、同じ問題に構造的に晒されており、修正も両者で統一しています。
+
+2. **Gameplay Scene Load完了の検知: `GameplayPlayerSpawner`**
+
+`GameplayPlayerSpawner`(`MainMenu.unity`の`NetworkManager` GameObjectに常駐、Host上でのみ動作)が、NGOの`NetworkSceneManager.OnLoadEventCompleted`イベントを購読します。
+
+```csharp
+private void HandleServerStarted()
+{
+    NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= HandleLoadEventCompleted;
+    NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += HandleLoadEventCompleted;
+}
+
+private void HandleLoadEventCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
+{
+    if (!NetworkManager.Singleton.IsServer) return;
+    if (sceneName != gameplaySceneName) return; // "SampleScene"
+
+    foreach (ulong clientId in clientsCompleted)
+    {
+        if (/* 既にPlayerObjectを持っていれば skip (二重Spawn防止) */) continue;
+        NetworkObject.InstantiateAndSpawn(prefab, NetworkManager.Singleton, ownerClientId: clientId, isPlayerObject: true, position: spawnPoint.position, rotation: spawnPoint.rotation);
+    }
+}
+```
+
+`OnLoadEventCompleted`は**Server専用**のイベントで、「指定したSceneのLoadを完了したClientのリスト」を1回だけ通知します。これにより「本当にGround/StartAreaが存在するSceneへ実際に遷移し終えた」タイミングでのみPlayerをSpawnできます。`OnServerStarted`(`NetworkManager`のイベント)経由で毎回のHost起動(初回のCreate/StartHost、Leave→再Create、Single PlayerのRetry等)ごとに購読し直しているため、同一Application内で複数回`StartHost()`が呼ばれても正しく動作します(第9.2.1章のRuntime Test参照)。
+
+3. **Player Spawn Points**
+
+`SampleScene.unity`の`StartArea`内に`PlayerSpawnPoints`(空の親、`Architecture.md`「3. Scene構成」参照)を配置し、その子に`SpawnPoint_1`〜`SpawnPoint_4`(最大4人分、互いに重ならない座標)を用意しました。`GameplayPlayerSpawner`は`clientsCompleted`の**配列内Index**(接続順ではなく、そのScene Load完了通知内での並び順)を`spawnPoints.Length`で割った剰余でSpawn Pointを割り当てます。PlayerがどのSpawn Pointに出るかをClient自身が選ぶことはできません(Server/Host側が一方的に決定する、Deterministic Assignment)。
+
+### 動作確認済み(Runtime Test, Step 9.2)
+
+- **Root Cause再現**: 上記のY座標推移(-149 → -937)を修正前のコードで実測により再現し、原因を特定
+- **Scene自体の健全性確認**: 修正前の時点で、`SampleScene`の`Ground`/`StartArea`/`OverviewCameraPoint`自体は正しくLoadされている(Scene自体の破損ではないこと)ことを`GameFlowManager.CurrentPhase`等の読み取りで確認済み
+- **Single Player**: TITLE→START→TIME ATTACK→STAGE SELECT→Stage 1選択で、Playerが`SpawnPoint_1`の座標(`(-1, 0, -11)`)に正しくSpawnし、Y速度0で安定していることを確認。Placement・BUILD TIME開始も正常に動作することを確認
+- **Online(Host 1接続によるシミュレーション)**: Room滞在中は`ConnectedClients[0].PlayerObject == null`であることを確認(Step 9.2で意図した「Room中はPlayerが存在しない」状態)。Host自身のPlayer数を2人分に見せかけて`HostTryStartGame(2)`を呼び、Scene遷移後に`SpawnPoint_1`へ正しくSpawnし安定していること、Placement・BUILD TIME開始も正常であることを確認
+- **Retry(同一Session内でのIn-place Reset)**: `GameFlowManager.RetrySequence()`(第22章、Step 8.5から変更なし)実行後もPlayer-タグ付きオブジェクトが1個のまま(重複なし)、`SpawnPoint_1`へ正しく戻ることを確認。RetryはNGOレベルでの新規接続・新規Scene Loadを伴わないため、`GameplayPlayerSpawner`は関与しません
+- **StartHost()の複数回呼び出し(再購読ロジックの検証)**: `NetworkManager.Shutdown()`→MainMenuへ戻る→再度Single Playerを開始(2回目の`StartHost()`)という手順で、2回目のGameplay Scene LoadでもPlayerが正しく1体だけSpawnされる(重複なし)ことを確認。`GameplayPlayerSpawner`の`OnServerStarted`再購読ロジック(`-=`してから`+=`)が意図通り機能していることの実証です
+- **Player Prefab自体は無変更**: SpawnされたPlayerのComponent構成(`Transform`/`Rigidbody`/`CapsuleCollider`/`PlayerStats`/`NetworkObject`/`PlayerMotor`/`NetworkTransform`/`NetworkRigidbody`/`PlacementController`/`ChallengeInput`/`PlayerPushController`)が全て揃っていることを確認。Owner Authority・Push・Placement等の既存Player機能(PlayerSystem.md)には一切手を加えていません
+- Console: 上記すべてのテストを通じてError/Warning 0件
+
+### 未実装/確認できなかった事項
+
+- **実際の2台のClientによるEnd-to-End確認**: 第9.5章(OnlineSession.md第10章)から持ち越しの制約と同じく、同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難なため、Host自身の1接続によるシミュレーションのみで検証しました。開発者ご自身による実機確認を推奨します
+- 4人接続時のSpawn Point割り当て(3人目・4人目が正しく`SpawnPoint_3`/`SpawnPoint_4`に割り当てられるか)は、実際に4接続を同時に用意することが困難だったため未検証です。コード上は`clientIndex % spawnPoints.Length`のロジックで対応済みです

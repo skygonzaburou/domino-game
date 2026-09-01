@@ -216,18 +216,20 @@ public bool HostTryStartGame(int connectedPlayerCount)
 `NetworkManager.NetworkConfig.ConnectionApproval = true` + `NetworkManager.ConnectionApprovalCallback`(Step 9, section 40)を、Services初期化と同じタイミング(`EnsureServicesInitializedInternal()`、Create/Join呼び出し前に必ず実行される経路)で設定しています。
 
 ```csharp
-private void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+private static void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
 {
     SessionPhase phase = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.Phase : SessionPhase.Room;
     bool gameStarted = phase == SessionPhase.StartingGame || phase == SessionPhase.InGame;
 
     response.Approved = !gameStarted;
-    response.CreatePlayerObject = true;
+    response.CreatePlayerObject = false; // Step 9.2で変更(以前はtrue)。詳細下記
     if (gameStarted) response.Reason = "This game has already started.";
 }
 ```
 
 Room・Stage Select中のJoinは許可し、Host GAME START後(`StartingGame`/`InGame`)のみServer側で拒否します(第39章の仕様どおり)。**ClientのUIでJoin Buttonを隠すだけでなく、Server側でも独立して拒否する**という要件を満たしています。`NetworkConfig.ConnectionApproval`が`true`かつCallbackが正しく登録されていることは実機確認済みです。`NetworkManager.ConnectionApprovalRequest`/`ConnectionApprovalResponse`はNGOが内部的に生成する型のため、`HandleConnectionApproval()`自体を疑似的な引数で直接呼び出すテストは実施できませんでした(手動`new()`ではNGO内部の初期化が伴わずNullReferenceExceptionになるため) - ロジック自体はReflectionで確認した型定義どおりのシンプルなField設定のみです。
+
+**`CreatePlayerObject = false`について(Step 9.2)**: 当初`true`だったこの値により、接続した瞬間(まだRoom/Stage Select中、`MainMenu.unity`がActive Scene)にGameplay Player(`Player.prefab`)がSpawnされ、Groundの無い空間へ落下し続けるバグが発生していました。現在は常に`false`にし、Gameplay SceneのLoadが完了したタイミングで別のコンポーネント(`GameplayPlayerSpawner`)が明示的にSpawnする方式に変更しています。Root Cause・Fixの詳細・実機確認結果は`Networking.md`「24. Player Spawn Lifecycle」を参照してください。Method自体も(Single Playerの`StageSelectController`から呼べるよう)`private instance`から`public static`/`private static`へ変更しました。
 
 失敗時のUI表示(第41章)は、Service側のAllocation状態から「満員」等と正確に判別できない場合が多いため、既存のJoin失敗表示(`"Could not join the room.\nPlease check the Join Code."`)を流用しています(仕様上許容されている対応です)。
 

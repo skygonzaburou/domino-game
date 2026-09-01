@@ -33,7 +33,8 @@ Assets/
 │  │  │  ├─ CheckpointZone.cs
 │  │  │  └─ GoalAreaZone.cs
 │  │  ├─ Networking/
-│  │  │  └─ NetworkBootstrap.cs
+│  │  │  ├─ NetworkBootstrap.cs
+│  │  │  └─ GameplayPlayerSpawner.cs … Step 9.2で追加
 │  │  └─ CameraSystem/
 │  │     ├─ ThirdPersonCamera.cs  … Step 4でPlacement View機能を追加。Step 7.6でOverview Camera機能を追加
 │  │     └─ OverviewCameraPoint.cs … Step 7.6で追加。Stage側に配置するOverview視点マーカー
@@ -96,7 +97,7 @@ Step 9より、Scene は `MainMenu.unity`(Build Index 0)と `SampleScene.unity`(
 
 ### MainMenu.unity(Step 9)
 
-`Main Camera`(UI描画用の単純なCamera)・`EventSystem`(`InputSystemUIInputModule`)・`Canvas`(`MainMenuController`、TitlePanel等7Panel)に加え、**`NetworkManager`(`NetworkManager`/`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`)がこのSceneに常駐**しています(Step 9より前はSampleScene側にありました)。`NetworkBootstrap.Awake()`で明示的に`DontDestroyOnLoad`されるため、Gameplay SceneへのScene遷移(`LoadSceneMode.Single`)を跨いでも同一インスタンスが生き続け、SampleScene側にNetworkManagerが重複生成されることはありません。`GameFlowManager`/`Domino`/`Player`等のGameplay Objectはこちらには一切配置されていません。
+`Main Camera`(UI描画用の単純なCamera)・`EventSystem`(`InputSystemUIInputModule`)・`Canvas`(`MainMenuController`、TitlePanel等7Panel)に加え、**`NetworkManager`(`NetworkManager`/`UnityTransport`/`NetworkBootstrap`/`DominoSpawner`/`DominoCleanupManager`/`GameplayPlayerSpawner`)がこのSceneに常駐**しています(Step 9より前はSampleScene側にありました。`GameplayPlayerSpawner`はStep 9.2で追加)。`NetworkBootstrap.Awake()`で明示的に`DontDestroyOnLoad`されるため、Gameplay SceneへのScene遷移(`LoadSceneMode.Single`)を跨いでも同一インスタンスが生き続け、SampleScene側にNetworkManagerが重複生成されることはありません。`GameFlowManager`/`Domino`/`Player`等のGameplay Objectはこちらには一切配置されていません(`Player`自体はGameplay Scene Load完了時に`GameplayPlayerSpawner`がSpawnします、Step 9.2)。
 
 ### SampleScene.unity(Gameplay Scene)
 
@@ -112,8 +113,9 @@ Root GameObjectは次の7つです(Step 9で`NetworkManager`がMainMenu側へ移
 | **GameFlowManager**(Step 6) | `NetworkObject`, `GameFlowManager` | GamePhase・Checkpoint進捗をHost Authorityで管理するScene-placed NetworkObject。Playerのように動的生成されるのではなく、Scene読み込み時から存在する |
 | **GameFlowZones**(Step 6) | Transform のみ(空の親) | `StartArea` / `Checkpoint_01` / `Checkpoint_02` / `GoalArea` の4つのZoneインスタンスをまとめる親。実際のコース配置はStageごとに変わる想定で、詳細はStageAuthoring.mdを参照 |
 | **CameraPoints**(Step 7.6) | Transform のみ(空の親) | `OverviewCameraPoint` をまとめる親。RUNNING/SUCCESS/FAILED中のOverview Camera視点をStage側で設定するためのマーカー。詳細はStageAuthoring.md第9章を参照 |
+| **PlayerSpawnPoints**(Step 9.2) | Transform のみ(空の親) | `SpawnPoint_1`〜`SpawnPoint_4`(子Transform、Start Area内・互いに重ならない配置)をまとめる親。`GameplayPlayerSpawner`(MainMenu Scene側、後述)が`GameObject.Find("PlayerSpawnPoints")`でこのSceneロード後に検索し、接続Client順に(`clientIndex % 4`)割り当てる。`NetworkObject`は持たない、純粋なLocal配置マーカー |
 
-**重要**: このScene自体には **Playerは1体も配置されていません**。Playerは `NetworkManager` が実行時に `Player.prefab` を都度生成(Spawn)する形で登場します。これはNetcode for GameObjectsの標準的な作り方で、「Editor上で目に見える固定のキャラクター」ではなく「接続してきたクライアントの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**です。Step 3時点では`Domino.prefab`が`NetworkObject`を持たなかったため同期対象外でしたが、Step 5で`Domino.prefab`に`NetworkObject`が追加されたことで、これら20個も「In-Scene-Placed NetworkObject」という扱いを継承しています。現在`DominoLine`は非アクティブのため実際にSpawn/同期が走ることはありませんが、将来再度アクティブ化して使う場合はこの点に注意してください(詳細はImplementationStatus.mdのStep 5章を参照)。
+**重要**: このScene自体には **Playerは1体も配置されていません**。Playerは接続時点ではなく、**このSceneのLoadが完了した時点で** `GameplayPlayerSpawner`(MainMenu Scene側常駐、後述)が`Player.prefab`を都度生成(Spawn)する形で登場します(Step 9.2、詳細はNetworking.md「Player Spawn Lifecycle」章を参照)。「Editor上で目に見える固定のキャラクター」ではなく「Gameplay Sceneのロードが完了した接続Clientの数だけ動的に生成されるキャラクター」として扱うためです。一方 `DominoLine` 配下のDominoは**Editor上に直接配置されたテスト用インスタンス**です。Step 3時点では`Domino.prefab`が`NetworkObject`を持たなかったため同期対象外でしたが、Step 5で`Domino.prefab`に`NetworkObject`が追加されたことで、これら20個も「In-Scene-Placed NetworkObject」という扱いを継承しています。現在`DominoLine`は非アクティブのため実際にSpawn/同期が走ることはありませんが、将来再度アクティブ化して使う場合はこの点に注意してください(詳細はImplementationStatus.mdのStep 5章を参照)。
 
 Step 4で追加したGhost Dominoは、Playerと同様に**Scene上には直接配置されておらず**、`PlacementController`が実行時に`Instantiate()`する形で登場する、完全にLocal限定の見た目専用オブジェクトです(`NetworkObject`を持ちません)。Ghostは`PlacementController`ごとに1体だけ生成され、非表示⇄表示を繰り返して使い回されます(Placement Modeを抜けるたびに`Destroy`されるわけではありません)。一方、確定後のReal Dominoは、Step 4では確定したClient自身がローカルで`Instantiate()`していましたが、Step 5でこれをやめ、**必ずHost側の`DominoSpawner`が`NetworkObject.InstantiateAndSpawn()`で生成する**方式に変更しました(詳細はNetworking.mdの第17〜19章を参照)。
 
@@ -127,14 +129,15 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 `ThirdPersonCamera` コンポーネントが付いており、初期値は `distance=4, pitchMin=-30, pitchMax=60, sensitivity=2, lockCursor=true` です。起動直後はまだ誰も追従対象になっていませんが、Playerがスポーンすると自動的にそのPlayerを追うようになります(詳細はPlayerSystem.md)。
 
 ### NetworkManager
-5つのコンポーネントが同じGameObjectに載っています。
+6つのコンポーネントが同じGameObjectに載っています。
 - `NetworkManager`: Netcode for GameObjects本体の管理者
 - `UnityTransport`: 実際の通信を行う部品(接続先 `127.0.0.1:7778`)
 - `NetworkBootstrap`: 誰がHostで誰がClientかを判断して自動的に起動処理を行う自作スクリプト
 - `DominoSpawner`(Step 5で追加): Host上でのみ、Domino配置要求の検証とSpawnを行う自作スクリプト。`NetworkBehaviour`ではなく普通の`MonoBehaviour`で、`PlacementController`からのRPCを受けて呼び出される
 - `DominoCleanupManager`(Step 7で追加): Host上でのみ、BUILDING中に倒れたまま一定時間経過したDominoをNetwork Despawnする自作スクリプト。`DominoSpawner`と同じく普通の`MonoBehaviour`で、`DominoSpawner`がSpawn直後に明示的に`Register()`したDominoだけを追跡する
+- `GameplayPlayerSpawner`(Step 9.2で追加): Host上でのみ、Gameplay SceneのLoad完了(`NetworkSceneManager.OnLoadEventCompleted`)を検知して`Player.prefab`を明示的にSpawnする自作スクリプト。詳細はNetworking.md「Player Spawn Lifecycle」章を参照
 
-この5つの関係は Networking.md で詳しく説明しています。
+この6つの関係は Networking.md で詳しく説明しています。
 
 ### GameFlowManager(Step 6)
 `NetworkObject`と`GameFlowManager`の2つが載っています。`NetworkManager`とは別のGameObjectで、Scene読み込み時から存在する「Scene-placed NetworkObject」です(Playerのように接続の都度動的生成されるのではありません)。`GamePhase`・Checkpoint進捗などを`NetworkVariable`で全Clientへ同期する司令塔で、詳細はGameFlow.mdを参照してください。
@@ -154,6 +157,7 @@ Step 6で追加したPlacement Markerも、Ghostと同じく`PlacementController
 | [ThirdPersonCamera.cs](../Assets/_Project/Scripts/CameraSystem/ThirdPersonCamera.cs) | `Domino.CameraSystem.ThirdPersonCamera` | `MonoBehaviour` | マウスでのカメラ操作。ネットワーク非対応(あくまでローカルの見た目の話なので不要)。Step 4で`EnterPlacementView()`/`ExitPlacementView()`によるPlacement用ビューへの遷移を追加。Step 7.6で`GameFlowManager.IsChallengeActive`に連動したOverview Cameraへのブレンド(Position/Rotation/FOV)を追加 |
 | [OverviewCameraPoint.cs](../Assets/_Project/Scripts/CameraSystem/OverviewCameraPoint.cs) | `Domino.CameraSystem.OverviewCameraPoint` | `MonoBehaviour` | Step 7.6で追加。Stage側に配置するOverview Camera視点のマーカー。Position/RotationはこのGameObjectのTransformそのもの、Field of ViewはInspector値。`NetworkObject`を持たない完全ローカルのStage設定用コンポーネント |
 | [NetworkBootstrap.cs](../Assets/_Project/Scripts/Networking/NetworkBootstrap.cs) | `Domino.Networking.NetworkBootstrap` | `MonoBehaviour` | Scene起動時に「自分はHostなのかClientなのか」を判断し、`NetworkManager` に開始指示を出す |
+| [GameplayPlayerSpawner.cs](../Assets/_Project/Scripts/Networking/GameplayPlayerSpawner.cs) | `Domino.Networking.GameplayPlayerSpawner` | `MonoBehaviour` | Step 9.2で追加。Host上でのみ、Gameplay SceneのLoad完了を検知し、接続中の各ClientにつきPlayerを1体、Scene内の`PlayerSpawnPoints`へ明示的にSpawnする |
 | [PlacementMarker.cs](../Assets/_Project/Scripts/Player/Placement/PlacementMarker.cs) | `Domino.Player.PlacementMarker` | `MonoBehaviour` | Step 6で追加。床に表示するPlacement Markerの見た目(サイズ・不透明度)のみを扱う、完全ローカルの表示専用コンポーネント |
 | [ChallengeInput.cs](../Assets/_Project/Scripts/Player/ChallengeInput.cs) | `Domino.Player.ChallengeInput` | `NetworkBehaviour` | Step 6で追加。`F`キー押下を`GameFlowManager`へのRPC呼び出しに変換する単機能スクリプト |
 | [GamePhase.cs](../Assets/_Project/Scripts/GameFlow/GamePhase.cs) | `Domino.GameFlow.GamePhase` | enum | Step 6で追加。BUILDING/READY/RUNNING/SUCCESSの4状態を定義 |
@@ -280,7 +284,8 @@ GameplayHUD (Root)
 ```mermaid
 graph TD
     NB[NetworkBootstrap] -->|StartHost / StartClient を呼ぶ| NM[NetworkManager]
-    NM -->|接続を検知するとPlayerPrefabをSpawn| PF[Player.prefab]
+    NM -->|接続許可のみ、CreatePlayerObject=false (Step 9.2)| GPS[GameplayPlayerSpawner (NetworkManager上, Hostのみ)]
+    GPS -->|Gameplay Scene Load完了後にInstantiateAndSpawn| PF[Player.prefab]
 
     subgraph "Player.prefab 内部の依存関係"
         PM[PlayerMotor] -->|RequireComponent| RB[Rigidbody]

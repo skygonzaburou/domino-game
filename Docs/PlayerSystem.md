@@ -29,6 +29,8 @@ Rootには「物理」「ネットワーク」「入力ロジック」だけが�
 
 **Nose(Step 7.7で追加)**: CapsuleだけのPrototype Characterでは正面がどちらか視覚的に分かりづらいという指摘を受け、Visual配下のローカル座標`(0, 0.6, 0.5)`(+Z方向、`PlayerMotor`が前進方向として扱う軸と一致)へ小さな赤い球を追加しました。Collider・Rigidbody・NetworkObject・NetworkTransform・Scriptはいずれも持たない、純粋な見た目専用の子オブジェクトです。Player本体のTransform(Owner AuthorityでNetwork同期される)にそのまま追従するだけなので、Player自身の同期・Physics設定には一切影響しません。将来Meshy等で正式なCharacter Modelに差し替える際は、この`Nose`ごと置き換える想定です。
 
+**Spawnされるタイミングについて(Step 9.2)**: この`Player.prefab`自体(階層構造・各Componentの設定)はStep 9.2で一切変更していません。変更したのは「いつ」「誰が」このPrefabをSpawnするかだけです。以前はNGOが接続の瞬間に自動でSpawnしていましたが、現在は接続時点ではSpawnされず(`NetworkConfig.PlayerPrefab`としての登録自体は変更なし)、Gameplay Scene(`SampleScene`)のLoadが完了したタイミングで`GameplayPlayerSpawner`(`Domino.Networking`名前空間、Networking.md「24. Player Spawn Lifecycle」参照)が明示的にSpawnします。本章以降で説明するOwner Authority・`IsOwner`判定・各Componentの挙動は、Spawnされた後のPlayerに対しては従来と全く同じです。
+
 ---
 
 ## 2. 各Componentの役割
