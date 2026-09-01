@@ -913,6 +913,53 @@ Step 9Aと同様、Main EditorのMPPM Host Tagによる自動Gameplay突入を�
 
 ---
 
+## Step 9C: Online Stage Select / Network Scene Start / Late Join Lock
+
+Step 9Cでは、Online Stage Select(Host-only操作・Selected Stage同期)・START GAME(Server側Validation)・Late Join禁止(Connection Approval)・Network Scene Transitionを実装し、Step 9で予定していたOnline経路を完成させました。Step 9A/9BのSingle Player経路・既存Gameplay Systemには変更を加えていません。詳細は`Docs/OnlineSession.md`を参照してください。
+
+### 実装済み
+
+**Online Stage Select(Host-only操作)**
+- `NetworkSessionState`に`NetworkVariable<int> SelectedStageId`と`SelectedStageChanged`イベントを追加
+- `StageSelectController`を拡張: `GameSessionContext.IsOnline`に応じてCard Clickの挙動を分岐(Single Player=即座に開始/Online=Host-only選択のみ)。`RefreshOnlineUI()`が全Card の`interactable`(Host-onlyでClientは操作不可)・選択中Cardのハイライト色・`selectionStatusText`("SELECTED: Stage X" / "Host selected: Stage X" / "Waiting for the host to choose a stage...")を、`SelectedStageChanged`イベント受信のたびに一括更新
+- `StageSelectPanel`にHost専用の`START GAME`ボタンを追加(`GameSessionContext.IsOnline`の間だけ表示、`interactable`はHostかつStage選択済みの場合のみ)
+
+**START GAME(Server側Validation)**
+- `NetworkSessionState.HostTryStartGame(int connectedPlayerCount)`: Host限定、現在Phaseが`StageSelect`であること・Player数2〜4であること・有効なStageが選択済みであることをServer側で独立に再検証してから`Phase`を`StartingGame`へ進める。呼び出し元(UI)が既にGateしていても信用しない設計(第37章の要件どおり)
+- `OnlineSessionController.OnStartGameButtonClicked()`: Host限定、`HostTryStartGame()`成功後に`IHostSession.IsLocked = true`(Session自体のLock)→`GameSessionContext.SelectedStageId`設定→`NetworkManager.SceneManager.LoadScene(...)`という順序で実行。Session Lock確定後にScene Loadを行うことで、開始決定とLock確定の間に別Clientが割り込む余地を最小化(第57章)
+
+**Late Join禁止(Connection Approval)**
+- `NetworkManager.NetworkConfig.ConnectionApproval = true` + `ConnectionApprovalCallback`を、Services初期化と同じ経路(Create/Join呼び出し前に必ず実行)で設定
+- `HandleConnectionApproval()`: `NetworkSessionState.Phase`が`StartingGame`/`InGame`の場合のみServer側で接続を拒否(Reason付き)。Room/Stage Select中のJoinは許可(第39章の仕様どおり)。Client側のUI非表示だけでなく、Server側でも独立して拒否する構成(第40章の要件どおり)
+
+**Network Scene Transition**
+- Online経路も、Single Player(Step 9A)と全く同じ`NetworkManager.SceneManager.LoadScene(sceneName, LoadSceneMode.Single)`を使用。Online専用のScene遷移ロジックを別途作っていません
+
+### 動作確認済み
+
+引き続きMPPM Host Tagによる自動Gameplay突入を避けるため`NetworkBootstrap`を一時Disableして検証しました。
+
+- **Host-only操作制限**: Client視点相当(`interactable = false`)でのCard Clickが実際にHandlerへ到達しないことを確認
+- **Selected Stage同期**: Stage 5をHost視点で選択 → 該当Cardが黄色にハイライトされ、`SELECTED: STAGE 5`が表示されることをスクリーンショットで確認
+- **START GAME Server-side Validation(重要な発見)**: 検証環境では実際の接続Playerが1人(Host自身)のみだったため、`OnStartGameButtonClicked()`(実際のPlayer数=1を`HostTryStartGame`へ渡す通常経路)は**意図通り拒否**されました(Console: `"server-side validation rejected the request"`)。これは実装の不具合ではなく、Player数不足を正しく検知した証拠です。Validationロジック自体は`HostTryStartGame(2)`のように条件を満たす人数を直接渡すことで独立して検証し、Phaseが正しく`StartingGame`へ遷移することを確認
+- **Session Lock**: `IHostSession.IsLocked = true`の設定が正しく反映される(`session.IsLocked == true`)ことを確認
+- **Network Scene Transition(Online経路)**: 上記の検証手順に続けて`NetworkManager.SceneManager.LoadScene()`を実行し、実際にSampleSceneへ遷移、Player Spawn・BUILD TIME開始まで正常に動作することを確認(Single Playerと同じ経路であることを実機で裏付け)
+- **Connection Approval設定**: `NetworkManager.NetworkConfig.ConnectionApproval == true`かつ`ConnectionApprovalCallback`が正しく登録されていることを確認。Callback自体(`HandleConnectionApproval`)は、NGOが内部的に生成する`ConnectionApprovalRequest`/`ConnectionApprovalResponse`型を手動`new()`で構築すると内部初期化不足によりNullReferenceExceptionになるため、疑似呼び出しでの直接テストはできませんでした。ロジック自体はReflectionで確認した型定義どおりの単純なField設定のみです
+- **Single Player Regression**: Step 9C変更後も、TIME ATTACK→STAGE SELECT→Stage選択→Gameplay(Player Spawn/Domino配置/BUILD TIME開始)が引き続き正常に動作することを確認
+- Console: 本Step実装コード由来の(意図的なValidation拒否テストを除く)Error/Warningは最終確認時点で0件
+
+### 未実装/確認できなかった事項
+
+- **実際の2人以上でのEnd-to-Endテスト**: MPPM Virtual Player自動操作の制約に加え、同一Editorプロセスから2つの独立したRelay接続を同時に張ること自体が困難なため、Host自身の1接続のみで検証しました。「本物の2人目のClientが実際にJoinし、Connection Approvalを通過し、Stage SelectでHostの選択をリアルタイムに見て、START GAME後に一緒にGameplayへ遷移する」という完全な結合テストは、開発者ご自身での実機確認を強く推奨します
+- Late Join拒否の完全なEnd-to-End確認(実際にGame開始後の第三者による接続試行とRejectの確認)も同様の制約で未実施です
+
+### 将来確認が必要な事項
+
+- 実際の2人以上でのEnd-to-Endテスト(上記)
+- Start Race Condition(第57章)は設計上"Phase変更→Lock→Scene Load"の順序で対策していますが、実際に複数Clientが同時にJoinを試みる高負荷状況での確認はできていません
+
+---
+
 ## Step 5: Networked Domino Placement / Host-Authoritative Domino Physics
 
 Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化しました。Ghost Dominoは引き続き完全にLocal専用のままです(`NetworkObject`等は一切追加していません)。既存のNetwork基盤(`NetworkBootstrap`、Port 7778、`NetworkManager`/`UnityTransport`、PlayerのOwner Authority関連コンポーネント)、Step 3のDomino物理パラメータ、Step 4のPlacement Mode基本操作(E/LMB/RMB/Escape、Ghost Wobble、Placement Camera)には変更を加えていません。

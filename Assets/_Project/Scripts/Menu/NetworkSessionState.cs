@@ -23,6 +23,7 @@ namespace Domino.Menu
         public int SelectedStageId => _selectedStageId.Value;
 
         public event System.Action<SessionPhase> PhaseChanged;
+        public event System.Action<int> SelectedStageChanged;
 
         private void Awake()
         {
@@ -32,16 +33,49 @@ namespace Domino.Menu
         public override void OnNetworkSpawn()
         {
             _phase.OnValueChanged += HandlePhaseChanged;
+            _selectedStageId.OnValueChanged += HandleSelectedStageChanged;
         }
 
         public override void OnNetworkDespawn()
         {
             _phase.OnValueChanged -= HandlePhaseChanged;
+            _selectedStageId.OnValueChanged -= HandleSelectedStageChanged;
         }
 
         private void HandlePhaseChanged(SessionPhase previous, SessionPhase current)
         {
             PhaseChanged?.Invoke(current);
+        }
+
+        private void HandleSelectedStageChanged(int previous, int current)
+        {
+            SelectedStageChanged?.Invoke(current);
+        }
+
+        // Host-only (Step 9C, section 34-35): highlighting a Stage in the Grid is separate
+        // from starting the game - Online Stage Select is a two-step Select-then-Start flow,
+        // unlike Single Player's one-click "select and go" (StageSelectController already
+        // branches on GameSessionContext.IsOnline for this).
+        public void HostSelectStage(int stageId)
+        {
+            if (!IsServer) return;
+            if (_phase.Value != SessionPhase.StageSelect) return;
+            _selectedStageId.Value = stageId;
+        }
+
+        // Host-only. Validates independently of whatever the UI already gated (section 37: "a
+        // Client sending an illegitimate Start Request must not be able to start the game") -
+        // connectedPlayerCount and catalog validity are both re-checked here, not just trusted
+        // from the caller.
+        public bool HostTryStartGame(int connectedPlayerCount)
+        {
+            if (!IsServer) return false;
+            if (_phase.Value != SessionPhase.StageSelect) return false;
+            if (connectedPlayerCount < 2 || connectedPlayerCount > 4) return false;
+            if (_selectedStageId.Value < 0) return false;
+
+            _phase.Value = SessionPhase.StartingGame;
+            return true;
         }
 
         // Host-only (Step 9, section 53: advancing to Stage Select Phase is Host/Server

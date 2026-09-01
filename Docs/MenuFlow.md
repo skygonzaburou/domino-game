@@ -29,7 +29,7 @@ STAGE SELECT          HostがStage選択     (Step 9C)
          GAMEPLAY
 ```
 
-Step 9AではTITLE→MODE SELECT→TIME ATTACK→STAGE SELECT→GAMEPLAYの、Single Player経路のみが完全に機能します。ONLINE PLAY側のパネル(CREATE ROOM/JOIN ROOM/ROOM)はStep 9Bで、Online専用のStage Select挙動(Host-only操作)はStep 9Cで実装します。
+Step 9A〜9Cを通じて、上図の全経路(Single Player: TITLE→MODE SELECT→TIME ATTACK→STAGE SELECT→GAMEPLAY / Online: TITLE→MODE SELECT→ONLINE PLAY→CREATE or JOIN→ROOM→(2人以上)→STAGE SELECT(Host-only)→GAMEPLAY)が実装済みです。Online側の詳細(Session API・Room・Host Authority・Late Join禁止等)は`Docs/OnlineSession.md`を参照してください。
 
 ## 2. Scene構成
 
@@ -115,10 +115,8 @@ SampleScene側には、Step 9以降`NetworkManager`は一切配置されてい�
 
 通常の(MPPM Tag/CLI引数のいずれも無い)起動時は、この経路は何もせず早期returnするため、MainMenuのTITLE画面が通常通り表示されます - Interactive Menu ModeとDevelopment Auto-start Modeは、同じコンポーネント内で条件分岐により明確に分離されています。
 
-## 9. 未実装(Step 9B / 9Cで対応)
+## 9. Online Play(Step 9B / 9C)
 
-- Online Play(Create Room / Join Room / Join Code / Online Room / Player Count)
-- Host-only Online Stage Select、Selected Stageの同期
-- Network Scene Transition(Online向け、Session Lock、Late Join禁止)
+Online Play(Create Room / Join Room / Join Code / Online Room / Player Count / Host-only Online Stage Select / Selected Stage同期 / Network Scene Transition / Late Join禁止)はStep 9B・9Cで実装済みです。詳細は`Docs/OnlineSession.md`を参照してください。
 
-詳細は`Docs/OnlineSession.md`(Step 9Bで作成)を参照してください。
+Step 9の対象外(Friend機能・Random Match・Public Room List・Matchmaking・Host Migration・Reconnect・Spectator Join・Ranking等)は今後の別Stepの対象です。

@@ -7,6 +7,7 @@ using Unity.Services.Authentication;
 using Unity.Services.Core;
 using Unity.Services.Multiplayer;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace Domino.Menu
@@ -43,13 +44,47 @@ namespace Domino.Menu
         [SerializeField] private TextMeshProUGUI statusText;
         [SerializeField] private Button stageSelectButton;
 
+        [Header("Stage Resolution (Step 9C)")]
+        [SerializeField] private StageCatalog catalog;
+
         private ISession _session;
         private bool _servicesInitialized;
         private Coroutine _waitForSessionStateRoutine;
 
+        public bool IsHost => _session != null && _session.IsHost;
+
         private void Awake()
         {
             Instance = this;
+        }
+
+        // Must be set before Create/JoinSessionAsync triggers StartHost()/StartClient()
+        // internally (Step 9C, section 40) - NetworkConfig.ConnectionApproval is read at
+        // listen-start time, so this always runs from EnsureServicesInitializedInternal(),
+        // which every Create/Join path awaits first.
+        private void SetupConnectionApproval()
+        {
+            if (NetworkManager.Singleton == null) return;
+            NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
+            NetworkManager.Singleton.ConnectionApprovalCallback = HandleConnectionApproval;
+        }
+
+        // Server-only Rejection of new connections once the game has actually started (Step 9,
+        // section 40-41): Client UI hiding the Join button is not sufficient on its own - a
+        // Client bypassing the UI (or racing a Join against Start Game) must still be refused
+        // here. Allowed through Room and Stage Select (section 39) - only StartingGame/InGame
+        // reject.
+        private void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+        {
+            SessionPhase phase = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.Phase : SessionPhase.Room;
+            bool gameStarted = phase == SessionPhase.StartingGame || phase == SessionPhase.InGame;
+
+            response.Approved = !gameStarted;
+            response.CreatePlayerObject = true;
+            if (gameStarted)
+            {
+                response.Reason = "This game has already started.";
+            }
         }
 
         private System.Threading.Tasks.Task EnsureServicesInitializedAsync()
@@ -70,6 +105,8 @@ namespace Domino.Menu
             {
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
             }
+
+            SetupConnectionApproval();
 
             _servicesInitialized = true;
         }
@@ -136,8 +173,44 @@ namespace Domino.Menu
             NetworkSessionState.Instance?.HostAdvanceToStageSelect(_session.PlayerCount);
         }
 
+        // Host-only (Step 9C, section 37). Re-validates independently of whatever the UI
+        // already gated - NetworkSessionState.HostTryStartGame() re-checks Player Count and
+        // Phase server-side, and the resolved Stage must exist in the Catalog. Session Lock is
+        // committed before the Scene Load starts (section 57), so a Join racing against Start
+        // Game cannot slip in between "decided to start" and "actually locked".
+        public void OnStartGameButtonClicked()
+        {
+            if (_session == null || !_session.IsHost) return;
+            if (NetworkSessionState.Instance == null) return;
+
+            int stageId = NetworkSessionState.Instance.SelectedStageId;
+            StageDefinition stage = catalog != null ? catalog.FindById(stageId) : null;
+            if (stage == null)
+            {
+                Debug.LogError("[OnlineSessionController] StartGame: no valid Stage selected.");
+                return;
+            }
+
+            bool started = NetworkSessionState.Instance.HostTryStartGame(_session.PlayerCount);
+            if (!started)
+            {
+                Debug.LogError("[OnlineSessionController] StartGame: server-side validation rejected the request (Player Count / Phase / Selected Stage).");
+                return;
+            }
+
+            if (_session is IHostSession hostSession)
+            {
+                hostSession.IsLocked = true;
+            }
+
+            GameSessionContext.SelectedStageId = stage.StageId;
+            NetworkManager.Singleton.SceneManager.LoadScene(stage.GameplaySceneName, LoadSceneMode.Single);
+        }
+
         private void OnSessionJoinedOrCreated()
         {
+            GameSessionContext.IsOnline = true;
+
             _session.Changed += RefreshRoomUI;
             _session.StateChanged += HandleSessionStateChanged;
 
@@ -177,6 +250,13 @@ namespace Domino.Menu
             if (phase == SessionPhase.StageSelect)
             {
                 MainMenuController.Instance.ShowState(MenuState.StageSelect);
+            }
+            else if (phase == SessionPhase.Room)
+            {
+                // Reached either on first subscribe (harmless no-op re-show of the Panel
+                // already showing) or via HostReturnToRoom() when Player Count drops below the
+                // minimum while still in Stage Select (section 38).
+                MainMenuController.Instance.ShowState(MenuState.OnlineRoom);
             }
         }
 
@@ -245,6 +325,8 @@ namespace Domino.Menu
             {
                 NetworkManager.Singleton.Shutdown();
             }
+
+            GameSessionContext.IsOnline = false;
         }
 
         private void RefreshRoomUI()
@@ -262,6 +344,15 @@ namespace Domino.Menu
                 statusText.text = _session.IsHost
                     ? (canStart ? string.Empty : "Waiting for players...")
                     : "Waiting for the host...";
+            }
+
+            // Section 38: dropping below the minimum while already in Stage Select must not
+            // leave Start Game reachable - returning to Room is the simplest way to enforce
+            // that without a separate "paused" state.
+            if (_session.IsHost && !canStart && NetworkSessionState.Instance != null
+                && NetworkSessionState.Instance.Phase == SessionPhase.StageSelect)
+            {
+                NetworkSessionState.Instance.HostReturnToRoom();
             }
         }
     }

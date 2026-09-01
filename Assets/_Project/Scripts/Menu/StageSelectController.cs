@@ -16,20 +16,43 @@ namespace Domino.Menu
         [SerializeField] private RectTransform gridContainer;
         [SerializeField] private Button cardTemplate;
 
-        private readonly List<GameObject> _spawnedCards = new List<GameObject>();
+        [Header("Online (Step 9C)")]
+        [SerializeField] private TextMeshProUGUI selectionStatusText;
+        [SerializeField] private Button startGameButton;
+
+        private readonly List<Button> _spawnedCards = new List<Button>();
+        private readonly List<int> _spawnedCardStageIds = new List<int>();
 
         private void OnEnable()
         {
             Populate();
+
+            if (GameSessionContext.IsOnline && NetworkSessionState.Instance != null)
+            {
+                NetworkSessionState.Instance.SelectedStageChanged += HandleSelectedStageChanged;
+                RefreshOnlineUI();
+            }
+
+            if (startGameButton != null) startGameButton.gameObject.SetActive(GameSessionContext.IsOnline);
+            if (selectionStatusText != null) selectionStatusText.gameObject.SetActive(GameSessionContext.IsOnline);
+        }
+
+        private void OnDisable()
+        {
+            if (NetworkSessionState.Instance != null)
+            {
+                NetworkSessionState.Instance.SelectedStageChanged -= HandleSelectedStageChanged;
+            }
         }
 
         private void Populate()
         {
             for (int i = 0; i < _spawnedCards.Count; i++)
             {
-                if (_spawnedCards[i] != null) Destroy(_spawnedCards[i]);
+                if (_spawnedCards[i] != null) Destroy(_spawnedCards[i].gameObject);
             }
             _spawnedCards.Clear();
+            _spawnedCardStageIds.Clear();
 
             if (catalog == null || cardTemplate == null || gridContainer == null) return;
 
@@ -47,19 +70,84 @@ namespace Domino.Menu
                 StageDefinition capturedStage = stage;
                 card.onClick.AddListener(() => OnStageCardClicked(capturedStage));
 
-                _spawnedCards.Add(card.gameObject);
+                _spawnedCards.Add(card);
+                _spawnedCardStageIds.Add(stage.StageId);
             }
         }
 
-        // Step 9A: only the Single Player (Local Host) path exists. Online Host selection
-        // (Step 9C) will branch here on GameSessionContext.IsOnline instead of starting a
-        // Session directly.
+        // Single Player (Step 9A): a click both selects and immediately starts - one step.
+        // Online (Step 9C): a click only highlights a choice (Host-only); starting is a
+        // separate explicit action via the START GAME button (section 37).
         private void OnStageCardClicked(StageDefinition stage)
         {
-            if (GameSessionContext.IsOnline) return;
+            if (!GameSessionContext.IsOnline)
+            {
+                GameSessionContext.SelectedStageId = stage.StageId;
+                StartLocalHostAndLoadGameplay(stage.GameplaySceneName);
+                return;
+            }
 
-            GameSessionContext.SelectedStageId = stage.StageId;
-            StartLocalHostAndLoadGameplay(stage.GameplaySceneName);
+            if (OnlineSessionController.Instance == null || !OnlineSessionController.Instance.IsHost) return;
+            NetworkSessionState.Instance?.HostSelectStage(stage.StageId);
+        }
+
+        public void OnStartGameButtonClicked()
+        {
+            OnlineSessionController.Instance?.OnStartGameButtonClicked();
+        }
+
+        private void HandleSelectedStageChanged(int stageId)
+        {
+            RefreshOnlineUI();
+        }
+
+        // Host-only card interactability (section 34), Selected Stage highlight (section 35),
+        // and the Waiting/Selected status text (section 36) - all driven off the same
+        // NetworkSessionState.SelectedStageId read, so Host and Client render consistently
+        // from the same synced source rather than tracking a separate local copy.
+        private void RefreshOnlineUI()
+        {
+            bool isHost = OnlineSessionController.Instance != null && OnlineSessionController.Instance.IsHost;
+            int selectedStageId = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.SelectedStageId : -1;
+
+            for (int i = 0; i < _spawnedCards.Count; i++)
+            {
+                Button card = _spawnedCards[i];
+                if (card == null) continue;
+
+                card.interactable = isHost;
+
+                Image image = card.GetComponent<Image>();
+                if (image != null)
+                {
+                    bool isSelected = _spawnedCardStageIds[i] == selectedStageId;
+                    image.color = isSelected
+                        ? new Color(1f, 0.85f, 0.3f, 1f)
+                        : new Color(0.2f, 0.55f, 0.9f, 1f);
+                }
+            }
+
+            if (startGameButton != null)
+            {
+                startGameButton.interactable = isHost && selectedStageId >= 0;
+            }
+
+            if (selectionStatusText != null)
+            {
+                StageDefinition selectedStage = catalog != null ? catalog.FindById(selectedStageId) : null;
+                string stageName = selectedStage != null ? selectedStage.DisplayName : null;
+
+                if (isHost)
+                {
+                    selectionStatusText.text = stageName != null ? $"SELECTED: {stageName}" : "Select a Stage";
+                }
+                else
+                {
+                    selectionStatusText.text = stageName != null
+                        ? $"Host selected: {stageName}"
+                        : "Waiting for the host to choose a stage...";
+                }
+            }
         }
 
         // Single Player = "Local Host, Connected Players = 1" (Step 9, section 11) - reuses the

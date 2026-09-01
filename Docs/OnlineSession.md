@@ -140,13 +140,100 @@ MainMenu Sceneの`NetworkSessionState`は、Host起動時にScene-placed Network
 
 ---
 
-## 8. 未実装(Step 9Cで対応)
+## 8. Online Stage Select(Step 9C)
 
-- Stage Select画面でのHost-only操作制限(Client側Stage Buttonの`interactable = false`)
-- Selected StageのClientへの同期・表示
-- START GAME(Server側Validation: Host確認・Player数2〜4・有効なStage ID)
-- Late Join禁止(Connection Approval、Session Lock)
-- Network Scene Transition(`NetworkManager.SceneManager.LoadScene`によるOnline Gameplay開始)
-- Start Race Condition対策(Session State を先にLockしてからScene Loadする順序)
+`StageSelectPanel`は9A(Single Player)・9B/9C(Online)の両方から到達しますが、Scene/UI階層は完全に共有しています(Onlineだけの別Panelは作っていません)。`GameSessionContext.IsOnline`で挙動を分岐します。
 
-詳細は次のStep 9Cで`OnlineSession.md`に追記します。
+### Host-only操作制限
+
+`StageSelectController.RefreshOnlineUI()`が、生成済みの各Stage Cardの`Button.interactable`を`OnlineSessionController.Instance.IsHost`で一括制御します。
+
+```csharp
+card.interactable = isHost;
+```
+
+Clientは同じGridを見ますが、どのCardも押せません(`interactable = false`のため`ExecuteEvents`経由の疑似ClickですらHandlerに到達しないことを実機確認済み)。
+
+### Selected StageのHost→全員同期・表示
+
+`NetworkSessionState`に`NetworkVariable<int> SelectedStageId`を追加しました(Session Phaseと同じNetworkObject)。
+
+```csharp
+public void HostSelectStage(int stageId)
+{
+    if (!IsServer) return;
+    if (_phase.Value != SessionPhase.StageSelect) return;
+    _selectedStageId.Value = stageId;
+}
+```
+
+Cardクリック(Host-only)で呼ばれ、`SelectedStageChanged`イベント経由で全Clientの`RefreshOnlineUI()`が再実行されます。選択中のCardは黄色にハイライトし(`Image.color`切り替え)、Host側は`"SELECTED: {Stage名}"`、Client側は`"Host selected: {Stage名}"`(未選択なら`"Waiting for the host to choose a stage..."`)を表示します。実機確認: Stage 5をHost視点で選択 → Cardが黄色にハイライトし、`SELECTED: STAGE 5`が表示されることを確認済み。
+
+### START GAME(Server側Validation)
+
+`StageSelectPanel`にHost専用の`START GAME`ボタンを追加しました(`GameSessionContext.IsOnline`の間だけ表示)。
+
+```csharp
+public void OnStartGameButtonClicked()
+{
+    if (_session == null || !_session.IsHost) return;
+    ...
+    bool started = NetworkSessionState.Instance.HostTryStartGame(_session.PlayerCount);
+    if (!started) { ...reject... }
+
+    if (_session is IHostSession hostSession) hostSession.IsLocked = true;
+
+    GameSessionContext.SelectedStageId = stage.StageId;
+    NetworkManager.Singleton.SceneManager.LoadScene(stage.GameplaySceneName, LoadSceneMode.Single);
+}
+```
+
+`NetworkSessionState.HostTryStartGame(int connectedPlayerCount)`がServer側で独立に再検証します(呼び出し元がUIで既にGateしていても信用しません、第37章の要件どおり):
+
+```csharp
+public bool HostTryStartGame(int connectedPlayerCount)
+{
+    if (!IsServer) return false;
+    if (_phase.Value != SessionPhase.StageSelect) return false;
+    if (connectedPlayerCount < 2 || connectedPlayerCount > 4) return false;
+    if (_selectedStageId.Value < 0) return false;
+
+    _phase.Value = SessionPhase.StartingGame;
+    return true;
+}
+```
+
+**実機確認(重要な発見)**: 検証環境では実際に接続しているPlayerが1人(Host自身)のみだったため、`HostTryStartGame(_session.PlayerCount)`(実際の人数=1)を渡した通常経路は**意図通り拒否されました**(Console: `"server-side validation rejected the request"`)。これはバグではなく、Player数不足を正しく検知した証拠です。Server側Validationロジック自体は`HostTryStartGame(2)`のように条件を満たす人数を直接渡すことで独立して検証し、`Phase`が正しく`StartingGame`に遷移すること、続く`IHostSession.IsLocked = true`の設定、`NetworkManager.SceneManager.LoadScene()`によるGameplay Sceneへの遷移(Player Spawn・BUILD TIME開始まで)がすべて正しく動作することを、それぞれ個別に実機確認しました。
+
+### Start Race Condition対策(第57章)
+
+`HostTryStartGame()`内で`_phase.Value = SessionPhase.StartingGame`への変更が**先に**確定してから、呼び出し元が`IHostSession.IsLocked = true`とScene Loadを行う順序になっています。Phase変更はNetworkVariableとして即座に(Server側で)確定するため、「Startを決定した」時点と「実際にLockされた」時点の間に別Clientが割り込む余地を最小化しています。
+
+---
+
+## 9. Late Join禁止(Connection Approval)
+
+`NetworkManager.NetworkConfig.ConnectionApproval = true` + `NetworkManager.ConnectionApprovalCallback`(Step 9, section 40)を、Services初期化と同じタイミング(`EnsureServicesInitializedInternal()`、Create/Join呼び出し前に必ず実行される経路)で設定しています。
+
+```csharp
+private void HandleConnectionApproval(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+{
+    SessionPhase phase = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.Phase : SessionPhase.Room;
+    bool gameStarted = phase == SessionPhase.StartingGame || phase == SessionPhase.InGame;
+
+    response.Approved = !gameStarted;
+    response.CreatePlayerObject = true;
+    if (gameStarted) response.Reason = "This game has already started.";
+}
+```
+
+Room・Stage Select中のJoinは許可し、Host GAME START後(`StartingGame`/`InGame`)のみServer側で拒否します(第39章の仕様どおり)。**ClientのUIでJoin Buttonを隠すだけでなく、Server側でも独立して拒否する**という要件を満たしています。`NetworkConfig.ConnectionApproval`が`true`かつCallbackが正しく登録されていることは実機確認済みです。`NetworkManager.ConnectionApprovalRequest`/`ConnectionApprovalResponse`はNGOが内部的に生成する型のため、`HandleConnectionApproval()`自体を疑似的な引数で直接呼び出すテストは実施できませんでした(手動`new()`ではNGO内部の初期化が伴わずNullReferenceExceptionになるため) - ロジック自体はReflectionで確認した型定義どおりのシンプルなField設定のみです。
+
+失敗時のUI表示(第41章)は、Service側のAllocation状態から「満員」等と正確に判別できない場合が多いため、既存のJoin失敗表示(`"Could not join the room.\nPlease check the Join Code."`)を流用しています(仕様上許容されている対応です)。
+
+---
+
+## 10. 未実装/確認できなかった事項(Step 9全体を通して)
+
+- **実際の2人以上でのEnd-to-Endテスト**: これまでのStepと同じMPPM Virtual Player自動操作の制約に加え、同一Editorプロセスから2つの独立したRelay接続を同時に張ること自体が困難なため、Host自身の1接続のみで検証しました。Server側Validation(`HostAdvanceToStageSelect`/`HostTryStartGame`)は実際のPlayer数引数を意図的に差し替えることでロジック自体は検証済みですが、「本物の2人目のClientが実際にJoinしてConnection Approvalを通過し、Stage Selectで実際にHost選択を見る」という結合的な確認は開発者ご自身での実機確認を推奨します
+- Late Join拒否(Connection Approval)のEnd-to-End確認(実際にGame開始後の接続試行)も同様の制約で未実施です
