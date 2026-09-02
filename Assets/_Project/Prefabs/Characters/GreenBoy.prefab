@@ -1,0 +1,173 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &541735014010882779
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2176834105087392182}
+  m_Layer: 0
+  m_Name: GreenBoy
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2176834105087392182
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 541735014010882779}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 7013002328452348226}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1001 &7411105343945498281
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 2176834105087392182}
+    m_Modifications:
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: -0.04
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_Name
+      value: Model
+      objectReference: {fileID: 0}
+    - target: {fileID: 1404671781229238895, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0.063661665
+      objectReference: {fileID: 0}
+    - target: {fileID: 1404671781229238895, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0.004095571
+      objectReference: {fileID: 0}
+    - target: {fileID: 5866666021909216657, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_Controller
+      value: 
+      objectReference: {fileID: 9100000, guid: d9b62ed6d4296ad4a92ec82f25a5509f, type: 2}
+    - target: {fileID: 5866666021909216657, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      propertyPath: m_ApplyRootMotion
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1347771788756884661}
+  m_SourcePrefab: {fileID: 100100000, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+--- !u!95 &4013583177462211384 stripped
+Animator:
+  m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+  m_PrefabInstance: {fileID: 7411105343945498281}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &7013002328452348226 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+  m_PrefabInstance: {fileID: 7411105343945498281}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &7645107596765160440 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 5a7a732202b641d4f8b0b32924930ded, type: 3}
+  m_PrefabInstance: {fileID: 7411105343945498281}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &1347771788756884661
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7645107596765160440}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8d0727d5ae3244e3b569694d3912374, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.Components.NetworkAnimator
+  ShowTopMostFoldoutHeaderGroup: 1
+  NetworkAnimatorExpanded: 0
+  AuthorityMode: 1
+  m_Animator: {fileID: 4013583177462211384}
+  TransitionStateInfoList: []
+  AnimatorParameterEntries:
+    ParameterEntries:
+    - name: Speed
+      NameHash: -823668238
+      Synchronize: 1
+      ParameterType: 1
+    - name: IsRunning
+      NameHash: -887662580
+      Synchronize: 1
+      ParameterType: 4
+    - name: IsSlowWalk
+      NameHash: 1627644575
+      Synchronize: 1
+      ParameterType: 4
+    - name: IsIdleLong
+      NameHash: -1792678806
+      Synchronize: 1
+      ParameterType: 4
+    - name: Grounded
+      NameHash: 862969536
+      Synchronize: 1
+      ParameterType: 4
+    - name: JumpTrigger
+      NameHash: 113680519
+      Synchronize: 1
+      ParameterType: 9
+    - name: IsVictory
+      NameHash: -1802645191
+      Synchronize: 1
+      ParameterType: 4
+  AnimatorParametersExpanded: 0

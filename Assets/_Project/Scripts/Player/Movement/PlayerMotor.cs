@@ -35,6 +35,15 @@ namespace Domino.Player
         private bool _isGrounded;
         private bool _movementEnabled = true;
 
+        // Step 12: read-only Gameplay State exposed for PlayerAnimationController (Visual-only -
+        // never writes back through these). No behavior here changes; these mirror fields that
+        // already existed for ReadInput()/ApplyMovement()'s own use.
+        public bool IsGrounded => _isGrounded;
+        public Vector2 MoveAxis => _moveAxis;
+        public bool IsDashHeld => _dashHeld;
+        public bool IsSlowWalkHeld => _slowWalkHeld;
+        public event System.Action Jumped;
+
         // External horizontal velocity from Player-vs-Player collision push (Step 8A). Additive
         // on top of movement-driven targetVelocity rather than overwriting it, and decays every
         // FixedUpdate - this is what lets a push compose with normal WASD movement instead of
@@ -255,6 +264,7 @@ namespace Domino.Player
             Vector3 velocity = _rigidbody.linearVelocity;
             velocity.y = _stats.jumpForce;
             _rigidbody.linearVelocity = velocity;
+            Jumped?.Invoke();
         }
     }
 }

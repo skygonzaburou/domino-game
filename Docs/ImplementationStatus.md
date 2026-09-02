@@ -1260,3 +1260,40 @@ Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化
 ### 未実装/確認できなかった事項
 - **実際のKeyboard押下によるE/F/Esc/LMB(`wasPressedThisFrame`依存の入力)のシミュレーション確認**: New Input Systemの`InputSystem.QueueStateEvent`をEditor外部から注入する方式では、Unity自身のFrame Loopと処理タイミングがずれるため、`wasPressedThisFrame`ベースの単発入力を安定して再現できませんでした。W/A等`isPressed`(継続状態)ベースの入力は問題なく再現・確認できています。E押下によるPlacement Mode突入は、`PlacementController.EnterPlacementMode()`を直接呼び出す形でGuide側の反応を検証しました。本Stepで追加したコードはKeyboard/Mouseの状態を読み取るだけで一切書き込まないため、既存のE/F/Esc/LMB自体の挙動に影響する変更は行っていません(コードレビューで確認済み)
 - Online/2 Player Testは本Stepの方針通り未実施(Local UIのためNetworking非依存)
+
+---
+
+## Step 12: GreenBoy Humanoid Character / Animation Integration
+
+Player Root(Rigidbody/CapsuleCollider/PlayerMotor/PlayerStats/NetworkObject/NetworkTransform/NetworkRigidbody/PlacementController/ChallengeInput/PlayerPushController/PlayerDominoContact)は無変更。Meshy AI製HumanoidキャラクターGreenBoyへVisualのみを差し替えました。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)を参照。
+
+### 実装済み
+- **Asset Import確認・修正**: Character FBXを`Animation Type = Humanoid`, `Create From This Model`に設定し、Avatar.isValid = true・22 Humanoid Bone全自動マッピングを確認(Mixamo系標準命名のため手動修正不要)。Animation専用6本のFBXは`Copy From Other Avatar`でCharacter FBXのAvatarを共有し、全6本ともRig互換で成功。Loop設定をSpec通りに変更(Idle_3/Idle_8/Walking/Running = Loop, Regular_Jump = Non-Loop, FunnyDancing_01 = Loop)
+- **Material/Texture修正**: FBX Auto-Import生成のEmbedded Material(`Material_1`)にTextureが一切未割当だったことを発見し、`AssetDatabase.ExtractAsset()`で`Assets/_Project/Art/Characters/GreenBoy/Materials/GreenBoy_Material.mat`として外部化。Albedo/Normal/Metallicの3 TextureをURP/Litの対応Slotへ配線(Normal Map Type、Metallic/Roughnessのlinear/sRGB設定を修正)
+- **重要なバグ修正(Runtime確認で発覚)**: Embedded MaterialのEmission設定が`_EMISSION`有効・`_EmissionColor = white(1,1,1,1)`のまま引き継がれており、Play Mode実機確認で「Albedo Textureが全く見えず、Character全体が真っ白に表示される」不具合を発見。EmissionをOff・Black化して解決。あわせて、初期に設定した`Metallic = 1`(Roughness Texture活用のための暫定措置)も、Cloth/Skin中心のCharacterには不適切と判断し`Metallic = 0, Smoothness = 0.35`のシンプルな非金属設定に変更
+- **GreenBoy.prefab新規作成**(`Assets/_Project/Prefabs/Characters/GreenBoy.prefab`): Character FBXのInstanceを`Model`という子として持つVisual専用Prefab。Bone実測(`headfront`が+Z, `RightHand`が+X)によりRotation補正が不要と判明したためIdentity回転のまま使用。Y=-0.04のOffsetのみでFeetが地面に接するよう調整(Scale変更なし、Bone実測でHeight ≈1.7mと判明し既存Colliderに自然に収まるため)
+- **Animator Controller新規作成**(`Assets/_Project/Art/Animations/Shared/GreenBoy.controller`): Idle3/Idle8/Walk/Run/Jump/Danceの6 State、7 Parameter(`Speed`/`IsRunning`/`IsSlowWalk`/`IsIdleLong`/`Grounded`/`JumpTrigger`/`IsVictory`)。優先順位(Dance > Jump > Run/Walk > Idle8 > Idle3)をAny State Transitionの順序で実現。全TransitionをCross Fade化(Hard Snapなし)
+- **`PlayerAnimationController.cs`新規作成**(`Domino.Player`名前空間、Player Root上に追加): 既存Gameplay State(`PlayerMotor`の新設Read-onlyプロパティ経由)を読み取るだけでAnimator Parameterを更新するVisual専用Driver。Idle3→Idle8の3秒Timerをper-Client Localで管理。Ctrl Slow Walk中は`Animator.speed`を`0.55`に落として見た目を実速度に近づける(Gameplay Speed自体は無変更)
+- **`PlayerMotor.cs`への最小限の追加**: `IsGrounded`/`MoveAxis`/`IsDashHeld`/`IsSlowWalkHeld`(Read-onlyプロパティ)と`Jumped`(event)を追加。既存の`ReadInput()`/`ApplyMovement()`/`ApplyJump()`のGameplay Logic自体は一切変更していない(Jump成立時に`Jumped?.Invoke()`を1行追加したのみ)
+- **Network同期方式の選定・実装**: NGO 2.13.2の`NetworkAnimator`(`AuthorityMode = Owner`)を採用。既存の`NetworkTransform`と同じOwner-Authoritativeパターンに合わせ、Player Movement Authorityには一切影響しない。Jump Triggerは`NetworkAnimator.SetTrigger()`経由で送信し、Network上で確実に1回のPulseとして同期
+- **Player.prefab再構成**: `Player/Visual`(旧Capsule+Nose)を**Disable(削除ではない)**、新たに`Player/GreenBoyVisual`(GreenBoy.prefabのInstance)を追加。`CameraTarget`は`Visual`の兄弟Nodeとして最初から独立していたため、Camera Target参照(`PlayerMotor.cameraTarget`)は無変更で継続して機能
+
+### 動作確認済み(Single Player, Play Mode)
+- MainMenu → START → TIME ATTACK → Stage 1経由でGameplayへ遷移し、GreenBoyが正しくSpawnし、Green Shirt/Hair/Shorts/Bootsが正しい配色でレンダリングされることをスクリーンショットで確認(Emission修正後)
+- Feet-to-Ground: 側面からのScreenshotで、Bootsの底面が地面/Platformに接しており、浮き/めり込みがないことを確認
+- Forward Alignment: 前方(+Z)からの視点で顔が正面を向いていること、後方視点で後頭部が見えることを確認(Player RootのForwardと一致)
+- 6つのAnimation State(Idle3/Idle8/Walk/Run/Jump/Dance)すべてについて、`Animator.Update(dt)`による強制Advanceで各Stateへの遷移(`AnimatorStateInfo.IsName`で確認)とPose変化をスクリーンショットで確認。Idle3⇄Idle8、Dance→Idle3のTransition条件も個別に確認
+- Root Motion無効化の確認: Jump/Dance再生中、Player Root位置(`transform.position`)が完全に不変であることを確認(Section 5の最重要要件)
+- Collider/Rigidbody Regression: `CapsuleCollider`(radius=0.4, height=2, center=(0,1,0))・`Rigidbody`(mass=1)が本Step開始前の値から一切変化していないことを確認。既存9コンポーネント(Rigidbody/CapsuleCollider/PlayerStats/NetworkObject/PlayerMotor/NetworkTransform/NetworkRigidbody/PlacementController/ChallengeInput/PlayerPushController/PlayerDominoContact)がすべてPlayer Root上に残存し、`PlayerAnimationController`のみが新規追加されていることを確認
+- NetworkObject/Owner Authority: Spawn済みPlayerで`NetworkObject.IsSpawned = true`, `IsOwner = true`を確認。`PlayerAnimationController`が`IsOwner`のGatingに従い正しく動作することを確認
+- Console: 上記すべてを通じて本Step由来のError 0件(既存の無関係な`[Netcode] OnApplicationQuit`警告・`clip0` 0-frame警告のみ継続)
+
+### 未実装/確認できなかった事項
+- **実際の2 Client間でのOnline Animation可視性確認(Section 28)**: 本Step用の自動化環境では単一Editorプロセスからの検証となり、`ONLINE PLAY → CREATE ROOM`が実際にUnity Relayへ接続するため、2台目のClientを安定して駆動する手段がありませんでした。代わりに、`NetworkAnimator`の設定(AuthorityMode/Animator参照)が正しくAssetへ保存されていること、および既存の`NetworkTransform`と同一のOwner-Authoritativeパターンであることをコード/構成レベルで確認しています。**開発者ご自身での実機確認(Host+Client、MPPM可)を推奨します**
+- **実際のKeyboard入力(W/Shift/Ctrl/Space)によるEnd-to-Endの動作確認**: Step 5/11と同じ制約(`InputSystem.QueueStateEvent`がEditorのApplication Focus状態に依存し、この自動化環境では安定して`isPressed`状態を維持できませんでした)により、`PlayerMotor`の実Input経由でのAnimation切り替えは直接確認できていません。代わりに、Animator Parameterを直接操作してAnimator Controller自体の状態遷移を検証し、`PlayerAnimationController`のロジック(`PlayerMotor`の各プロパティを単純にミラーするだけの単純なコード)はコードレビューで確認しています
+- Idle3→Idle8の3秒Timer自体の実時間経過による確認は、同じEditor Frame Throttlingの制約により未実施(Transition条件`IsIdleLong`自体の発火は確認済み)
+
+### 将来確認が必要な事項
+- 実際の2人以上でのOnline Cross-Client Animation可視性確認(上記参照、最優先)
+- 実Keyboard入力によるSlow Walk時の`Animator.speed`調整の体感確認
+- Roughness Textureを活用した、より精密なPBR Material調整(現状はMetallic=0の簡易設定)
