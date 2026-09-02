@@ -37,8 +37,21 @@ namespace Domino.Networking
         // ordering between two independent disconnect listeners.
         public event System.Action<ulong> ClientSelectionRemoved;
 
+        // Step 13.1 Root Cause: an Online Host's Stage/Character Select return trip
+        // (RequestReturnToStageSelect/RequestReturnToCharacterSelect) stays connected and
+        // reloads MainMenu.unity without ever calling StartHost() again - which instantiates a
+        // brand new copy of this Scene-placed "NetworkManager" GameObject (see
+        // NetworkBootstrap.Awake()). Without this guard, this fresh duplicate's Awake() would
+        // silently overwrite Instance with an empty store, discarding every already-recorded
+        // Character Selection - the next HostTryStartGame()'s AllSelected() check would then
+        // fail even though nobody actually disconnected.
         private void Awake()
         {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
             Instance = this;
         }
 

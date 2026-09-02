@@ -1518,7 +1518,7 @@ Project全体で`"SampleScene"`をGrep調査した結果、実際のGameplay Sce
 `GameFlowManager`のRetry(第22章、Step 8.5から無変更)は`SceneManager.LoadScene`系のAPIを一切呼ばない、同一Scene内でのDomino Despawn + State ResetのみのIn-place Resetです(Project全体の`LoadScene(`呼び出し箇所を洗い出し済み、Retry経路には1件も含まれないことを確認)。そのため、Stage 2(`StageScene_2`)でRetryしてもSampleSceneへ切り替わることは構造的にあり得ません。Result Flow(SUCCESS時のRetry/Stage Select/Return Title)も本Stepでは一切変更していません。SUCCESS状態への到達を伴う実機テストまでは行っていません。
 
 ### 未実装/確認できなかった事項
-- **Online 2 Player Test(Section 30)**: Host+ClientでStage 2を選択し、両者が`StageScene_2`をLoadすることの実機確認は本レポート時点では未実施です。Character Select/Online Session周りの既存Architecture(Host-authoritative Stage Selection、NGO Network Scene Management)自体は無変更のため、Online固有のRiskは低いと判断していますが、Scene Syncという性質上、実機確認の価値は高いです。開発者の協力(MPPM Player 2操作)が可能であれば追って実施します
+- **Online 2 Player Test(Section 30)**: 本Step完了報告時点では未実施でしたが、直後にHost+Clientでの実機テストを実施したところ、Online特有のBugが発見されたため、Step 13.1として別途修正しました(詳細は本ファイルのStep 13.1章、および`Docs/Networking.md`「27章」を参照)
 - SUCCESS状態まで実際にプレイしてのRetry/Result Flow実機確認(上記の通りコード上の確認に留まる)
 
 ### Console
@@ -1527,4 +1527,41 @@ Project全体で`"SampleScene"`をGrep調査した結果、実際のGameplay Sce
 
 ### Git
 - Step 12.1.2b完了時点(`48d685e`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照
+
+---
+
+## Step 13.1: Fix Online Stage Select Re-entry State
+
+Step 13完了後、開発者ご自身によるHost+Client実機テストで発見されたOnline固有のBug(「Stage 2でGameplay開始 → Pause → Stage Select復帰 → 再度Stage選択 → START GAME」の**2回目のStart Game**がServer側Validationで必ずRejectされる)を修正しました。詳細なRoot Cause/Fixは[Docs/Networking.md](Networking.md)「27. Online Gameplay ⇄ Stage Select往復時のPersistent Singleton重複」、Session Phase往復の仕様は[Docs/OnlineSession.md](OnlineSession.md)「7. Session Phase」を参照してください。
+
+### Root Cause
+`PlayerCharacterSelectionStore`/`GameplayPlayerSpawner`/`NetworkBootstrap`が同居する"NetworkManager" GameObject(MainMenu.unityのScene-placed Content)は、Online GameplayからStage/Character Selectへ戻る経路(`NetworkManager.Shutdown()`を経ない、Session維持のためのMainMenu再ロード)のたびに、Unity側の制約により**新しい重複Instanceとして再Instantiate**されていました。`NetworkBootstrap.Awake()`がGuardなしに`DontDestroyOnLoad(gameObject)`を呼んでいたため、この重複も永続化。`PlayerCharacterSelectionStore`/`GameplayPlayerSpawner`はGuardなしの`Instance = this;`だけだったため、`PlayerCharacterSelectionStore.Instance`が空の重複へ静かに差し替わり、記録済みのCharacter Selectionが失われ、2回目の`HostTryStartGame()`の`AllSelected()`チェックが常に`false`になっていました。実機のReflection調査で、`PlayerCharacterSelectionStore`が実際に2 Instance存在し、`Instance`側の内部Dictionaryが空であることを直接確認して特定しました(推測ではなく実証)。
+
+### Fix
+`NetworkBootstrap.cs`・`GameplayPlayerSpawner.cs`・`PlayerCharacterSelectionStore.cs`の3つの`Awake()`に、標準的なSingleton重複防止Guard(`if (Instance != null && Instance != this) { Destroy(gameObject); return; }`)を追加。Server-side Validation(`HostTryStartGame`のPhase/PlayerCount/SelectedStageId/AllSelectedチェック)自体は一切変更・緩和していません。
+
+### 動作確認済み(実機Host+Client 2 Player、MPPM経由)
+一時的なDiagnostic Log(`[Step13.1 Diagnostic]`、最終Commit前に全削除済み)で各Validation条件を個別に可視化しながら実施。
+
+- Character Select → Stage Select → Stage 2選択 → START GAME(1回目): 正常動作(Fix前後で変化なし)
+- Pause → Stage Select復帰 → Stage 2再選択 → START GAME(2回目、Bug再現条件): Fix前は`AllSelected=False`で確実にReject、**Fix後は全条件`ok=True`となりStageScene_2へ正常遷移、Host/Client両Player Spawn成功**を確認
+- 同一Session内でStage 2 → Stage 1への切替(3回目のStart Game、`SampleScene`へ正常遷移)も確認
+- Pause → Character Select復帰(Stage Selectとは別経路)でも、既存のCharacter Selection(Host/Client双方)が保持されたまま正しく動作、Character Gateの再要求が発生しないことを確認
+- `PlayerCharacterSelectionStore`/`GameplayPlayerSpawner`/`NetworkBootstrap`のInstance数が、複数回の往復後も常に1個ずつであること(重複GameObjectの蓄積なし)を`GameObject.FindObjectsByType<T>()`で確認
+- Console: 上記テスト全体でError/Warning 0件(本Fixによる新規Error/Warningなし)
+
+### 発見した環境側の問題(コードバグではない)
+テスト中、既知の「Relay Transport Failure」(`player timed out due to inactivity` → `Host is shutting down`)に複数回遭遇しました。Room再作成・再Joinで都度復旧して継続。テスト中盤で一度、この切断が起きた直後の状態を「Player Spawnしない新しいBug」と誤認しかけましたが、`NetworkManager.IsListening=False`の直接確認により、切断由来の一時的症状であって`GameplayPlayerSpawner`側のコード起因ではないことを切り分けて確認しました。テストのペースを上げる(MCP呼び出し間の待機を減らす)ことで再現頻度が下がることも確認しています。
+
+### 未実装/確認できなかった事項
+- Single Playerでの再テストは実施していません(本Fixが触るのはOnlineの`Shutdown()`を経ないMainMenu再ロード経路のみで、Single Playerの`RequestReturnToStageSelect`は常に`NetworkManager.Shutdown()`を経由するため、コード上元々この重複条件に該当しないことを確認済みです)
+- SUCCESS到達後のRetry/Result Flowとの組み合わせでの再テストは未実施
+
+### Console
+- Error: 0件(最終確認時点、Diagnostic Log削除後)
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 13完了時点(`4db77b2`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照

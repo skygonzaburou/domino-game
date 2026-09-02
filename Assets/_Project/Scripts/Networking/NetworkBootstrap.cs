@@ -21,6 +21,21 @@ namespace Domino.Networking
     [DefaultExecutionOrder(-100)]
     public class NetworkBootstrap : MonoBehaviour
     {
+        // Step 13.1 Root Cause: an Online Host returning from Gameplay to Stage/Character
+        // Select (RequestReturnToStageSelect/RequestReturnToCharacterSelect) stays connected -
+        // it reloads MainMenu.unity via NetworkManager.SceneManager.LoadScene() without ever
+        // calling StartHost()/Shutdown() again. That reload instantiates a brand new copy of
+        // this Scene-placed "NetworkManager" GameObject (Unity has no way to know a
+        // DontDestroyOnLoad'd copy from the PREVIOUS load of the same Scene already exists),
+        // and without this guard its Awake() would DontDestroyOnLoad THAT copy too - a second,
+        // permanently-surviving root. NGO's own NetworkManager component self-protects, but its
+        // plain-MonoBehaviour siblings on this GameObject (GameplayPlayerSpawner,
+        // PlayerCharacterSelectionStore) do not, so each one's own Awake() would silently
+        // overwrite its static Instance with the fresh, empty duplicate - which is exactly how
+        // PlayerCharacterSelectionStore lost every recorded Character Selection on a second
+        // Stage Select entry, making the next HostTryStartGame()'s AllSelected() check fail.
+        public static NetworkBootstrap Instance { get; private set; }
+
         [Header("Development Auto-start (Explicit Opt-in only)")]
         [Tooltip("ONの場合のみ、この Player(Main EditorまたはMPPM Virtual Player)のMPPM Tag(Host/Client)に応じて自動的にNetworkを開始しGameplayへ直行します。通常のInteractive Menu Mode(普通にPlayした場合)では必ずOFFのままにしてください - MainMenuからのUser Actionでのみ開始するのが標準動作です。")]
         [SerializeField] private bool developmentAutoStartViaMppmTag = false;
@@ -31,10 +46,16 @@ namespace Domino.Networking
         private void Awake()
         {
             // Only one persistent NetworkManager root may exist across Menu <-> Gameplay
-            // scene loads (Step 9, section 46: Duplicate NetworkManager禁止). NetworkManager
-            // itself already self-persists once Singleton is set, but this call is made
-            // explicit here (idempotent if NGO also does it internally) so persistence does
-            // not silently depend on undocumented internal behavior.
+            // scene loads (Step 9, section 46: Duplicate NetworkManager禁止). Step 13.1: this
+            // is now enforced, not just assumed - a duplicate reload of MainMenu.unity destroys
+            // itself here before it can DontDestroyOnLoad a second root or let any sibling
+            // component overwrite its own static Instance.
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
             DontDestroyOnLoad(gameObject);
         }
 

@@ -138,6 +138,14 @@ Room画面でHostが`STAGE SELECT`を押すと、`OnlineSessionController.OnStag
 
 MainMenu Sceneの`NetworkSessionState`は、Host起動時にScene-placed NetworkObjectとして自動Spawnします(`GameFlowManager`と同じ仕組み)。Client側はNGOのScene同期完了後に`Instance`が利用可能になるため、`OnlineSessionController`はJoin直後に最大5秒のポーリングで`NetworkSessionState.Instance`の出現を待ってから購読します。
 
+### InGame → StageSelectへの再遷移(Step 13.1)
+
+`Session Phase`は一方向(Room→CharacterSelect→StageSelect→StartingGame→InGame)だけでなく、**Online GameplayからPause経由でStage/Character Selectへ戻り、再度Gameplayを開始する**という循環も正式にサポートしています(`InGame → StageSelect → StartingGame → InGame → ...`は何度でも繰り返せます)。
+
+この経路は、Sessionを切断せず(`NetworkManager.Shutdown()`を呼ばない)、`NetworkManager.SceneManager.LoadScene(mainMenuSceneName, LoadSceneMode.Single)`でMainMenuへ戻るだけで実現しています(`GameplayNavigationController.RequestReturnToStageSelect()`/`RequestReturnToCharacterSelect()`)。Scene-placed NetworkObjectである`NetworkSessionState`はこのタイミングで一度破棄され、MainMenu再ロード時に**新しいInstance**として再Spawnします。この新Instanceは`NetworkVariable`のDefault値(`Phase = Room`)で起動するため、`GameSessionContext.PendingHostReturnToStageSelect`(Host側でLoadScene直前にセットするStatic Flag)を`OnNetworkSpawn()`内で読み取り、`_phase.Value = SessionPhase.StageSelect`へ即座に復元します(詳細は`NetworkSessionState.cs`参照、Step 10Bから存在する仕組み)。
+
+**Step 13.1で発見・修正したBug**: この復元自体は正しく動作していましたが、Online Sessionを維持したままMainMenuへ戻るこの経路には、もう1つ見落とされていた問題がありました。詳細は`Networking.md`「27. Online Gameplay ⇄ Stage Select往復時のPersistent Singleton重複(Step 13.1)」を参照してください。
+
 ---
 
 ## 8. Online Stage Select(Step 9C)

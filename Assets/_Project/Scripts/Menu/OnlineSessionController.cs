@@ -120,7 +120,17 @@ namespace Domino.Menu
         {
             _session.Changed += RefreshRoomUI;
             _session.StateChanged += HandleSessionStateChanged;
-            RefreshRoomUI();
+
+            // Step 13.1 Root Cause: this very first read, immediately on a fresh MonoBehaviour's
+            // Start() right after MainMenu reloads, is the one call site where _session's Player
+            // Count cannot yet be trusted to reflect the still-fully-connected Session (confirmed
+            // via a controlled single-Host repro: PlayerCount read 1 here even though nobody had
+            // actually disconnected, which fired the section-38 safety net below and silently
+            // reverted a just-restored StageSelect Phase back to Room). The safety net itself
+            // (a genuine Player actually dropping below 2 while already in Character/Stage
+            // Select) stays fully armed for every subsequent _session.Changed event - only this
+            // one rehydration-time read skips applying it.
+            RefreshRoomUI(applyDisconnectSafetyNet: false);
 
             if (_waitForSessionStateRoutine != null) StopCoroutine(_waitForSessionStateRoutine);
             _waitForSessionStateRoutine = StartCoroutine(WaitForNetworkSessionStateAndSubscribe());
@@ -423,7 +433,9 @@ namespace Domino.Menu
             GameSessionContext.IsOnline = false;
         }
 
-        private void RefreshRoomUI()
+        private void RefreshRoomUI() => RefreshRoomUI(applyDisconnectSafetyNet: true);
+
+        private void RefreshRoomUI(bool applyDisconnectSafetyNet)
         {
             if (_session == null) return;
 
@@ -444,7 +456,7 @@ namespace Domino.Menu
             // Select must not leave those Phases reachable/continuable - returning to Room is
             // the simplest way to enforce that without a separate "paused" state (Step 12.1
             // extends this same guard to the new Character Select Phase).
-            if (_session.IsHost && !canStart && NetworkSessionState.Instance != null
+            if (applyDisconnectSafetyNet && _session.IsHost && !canStart && NetworkSessionState.Instance != null
                 && (NetworkSessionState.Instance.Phase == SessionPhase.StageSelect
                     || NetworkSessionState.Instance.Phase == SessionPhase.CharacterSelect))
             {

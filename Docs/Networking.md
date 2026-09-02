@@ -590,3 +590,52 @@ private bool IsGameplayScene(string sceneName)
 ### Scene登録
 
 新しいGameplay SceneはUnity 6の`Build Profiles`のScene Listに登録する必要があります(NGOの`NetworkSceneManager.LoadScene()`はBuild Settingsに登録されていないSceneを名前解決できません)。Step 13時点のScene List: `MainMenu.unity` / `SampleScene.unity`(`Assets/Scenes/`、歴史的経緯でこの1つだけ`_Project`外) / `StageScene_2.unity`(`Assets/_Project/Scenes/`)。
+
+---
+
+## 27. Online Gameplay ⇄ Stage Select往復時のPersistent Singleton重複(Step 13.1)
+
+Step 13で追加したMulti-Stage Scene機能を実際にOnline(Host+Client)でテストしたところ、「Stage 2でGameplayを開始 → Pauseから Stage Select へ戻る → 再度Stageを選んでSTART GAME」という**2回目のStart Game**がServer側Validationで必ずRejectされるBugが発覚しました。
+
+### Root Cause
+
+`GameSessionContext.PendingHostReturnToStageSelect`によるPhase復元自体(前章参照)は正しく動作していました。実際に壊れていたのは`PlayerCharacterSelectionStore`(Persistent、`GameplayPlayerSpawner`と同じ"NetworkManager" GameObject上)が保持していた**Character Selectionのデータ**でした。
+
+Online GameplayからStage/Character Selectへ戻る経路(`GameplayNavigationController.RequestReturnToStageSelect`/`RequestReturnToCharacterSelect`)は、Session/Relay接続を維持するという設計上の要求から、`NetworkManager.Shutdown()`を呼ばずに`NetworkManager.SceneManager.LoadScene(mainMenuSceneName, LoadSceneMode.Single)`だけでMainMenuへ戻ります。これは**一度も`StartHost()`を呼び直さない**Scene再読み込みです。
+
+一方、MainMenu.unityの"NetworkManager" GameObject(`NetworkBootstrap`/`GameplayPlayerSpawner`/`PlayerCharacterSelectionStore`が同居)は、**Scene-placed Content(Scene fileに直接配置されたGameObject)**です。UnityのScene Load機構は「同じSceneを過去にLoadした際、DontDestroyOnLoadで生き残っているCopyがある」ことを認識する手段を持っていません。そのため、このSceneが再ロードされるたびに、**同じ内容のGameObjectがもう1つ新規Instantiateされます**。
+
+`NetworkBootstrap.Awake()`は`DontDestroyOnLoad(gameObject)`を無条件に呼んでいたため、この新しい重複GameObjectも永続化されてしまいます。NGOの`NetworkManager`Component自身は重複検出・自己防御を内部的に持っている(`NetworkManager.Singleton`は重複せず、常に1つに保たれることを実機で確認済み)一方、**同じGameObject上の他のPlain MonoBehaviour(`GameplayPlayerSpawner`、`PlayerCharacterSelectionStore`)にはそのような保護が一切なく**、単純に`Awake()`で`Instance = this;`と代入するだけの実装でした。結果、新しい(空の)重複GameObjectの`Awake()`が走るたびに、`PlayerCharacterSelectionStore.Instance`は静かにこの空のCopyへ差し替わり、それまで記録されていた全Player分のCharacter Selectionが失われていました。2回目の`HostTryStartGame()`が`PlayerCharacterSelectionStore.Instance.AllSelected(...)`で必ず`false`を返していたのはこのためです(Phase・SelectedStageId・PlayerCountはいずれも正常でした)。
+
+実機のReflectionベース調査で、`GameObject.FindObjectsByType<PlayerCharacterSelectionStore>()`が実際に**2つ**のInstanceを返すこと、そのうち`Instance`が指している方の内部Dictionaryが空であることを直接確認し、この仮説を実証しました。
+
+### Fix
+
+`NetworkBootstrap`・`GameplayPlayerSpawner`・`PlayerCharacterSelectionStore`の3つの`Awake()`に、標準的なSingleton重複防止Guardを追加しました。
+
+```csharp
+private void Awake()
+{
+    if (Instance != null && Instance != this)
+    {
+        Destroy(gameObject);
+        return;
+    }
+    Instance = this;
+    // NetworkBootstrapのみ、この後にDontDestroyOnLoad(gameObject)が続く
+}
+```
+
+各Componentが「自分より先に登録済みのInstanceがあるかどうか」を自律的に判定するため、3つのComponent間の`Awake()`実行順序(Unityは`[DefaultExecutionOrder]`が同値の場合、Class間の順序を保証しない)に依存せず、**どのComponentが先に走っても**、既存の正しいInstanceが上書きされることはありません。重複GameObjectは`Destroy(gameObject)`でFrame末に破棄されます。
+
+### 設計ルール
+
+**DontDestroyOnLoadされたGameObjectがScene-placed Contentである場合(Prefabからの動的Instantiateではなく、Scene fileに直接配置されている場合)、そのSceneが将来2回目以降Loadされる可能性が少しでもあるなら、重複防止Guardを必ず入れる。** 「Shutdown()を経ずにNetworkManager.SceneManager.LoadScene()だけでこのSceneに戻る経路がある」ことが、まさにこの重複が現実に起こる条件です。
+
+### 動作確認済み(実機Host+Client 2 Player、MPPM経由)
+
+- Character Select → Stage Select → Stage 2選択 → START GAME(1回目): 正常動作(Fix前後で変化なし)
+- Pause → Stage Select復帰 → Stage 2再選択 → START GAME(2回目): Fix前は`AllSelected=False`でReject、**Fix後は正常にStageScene_2へ遷移し両Player Spawn成功**
+- 上記と同一SessionでStage 2 → Stage 1への切替(3回目のStart Game)も正常動作
+- Pause → Character Select復帰(Stage Select復帰と異なる経路)でも、既存のCharacter Selectionが保持されたまま正しく動作(Character Gateの再要求なし)
+- `GameObject.FindObjectsByType<PlayerCharacterSelectionStore/GameplayPlayerSpawner/NetworkBootstrap>()`がFix後は常に1個ずつであることを、複数回の往復後も確認済み(重複GameObjectの蓄積なし)

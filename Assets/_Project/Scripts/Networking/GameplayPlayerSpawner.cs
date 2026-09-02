@@ -37,8 +37,16 @@ namespace Domino.Networking
         [Tooltip("Gameplay Scene内でSpawn Pointの子Transformを探す、親GameObjectの名前")]
         [SerializeField] private string spawnPointsContainerName = "PlayerSpawnPoints";
 
+        // Step 13.1: guards against the duplicate "NetworkManager" GameObject an Online Host's
+        // Stage/Character Select return trip can instantiate (see NetworkBootstrap.Awake()) -
+        // without this, this Instance would silently start pointing at that fresh duplicate.
         private void Awake()
         {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
             Instance = this;
         }
 
