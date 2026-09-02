@@ -19,6 +19,17 @@ namespace Domino.Menu
         // multiple Clients cannot share one static field).
         public static int SelectedCharacterId { get; set; } = 1;
 
+        // Step 12.1.1 (Section 15/26): local-Client-only, optimistic mirror of whether THIS
+        // Client has ever actually clicked a Character Card during the current Online Session
+        // (Server-authoritative HasSelectedCharacter lives in PlayerCharacterSelectionStore and
+        // drives the real Stage Select Gate - this flag exists only so CharacterSelectController
+        // can show "Choose your character" vs "Selected: X, waiting..." for the local Player
+        // without a network round-trip). Reset only on a fresh Create/Join (see
+        // OnlineSessionController.OnSessionJoinedOrCreated) - NOT on every Character Select entry,
+        // so it correctly stays true across a Pause -> Character Select return (Section 31, where
+        // the prior Gameplay Selection is still valid).
+        public static bool HasSelectedCharacterThisSession { get; set; }
+
         // Step 10B (Section 29): consumed once by MainMenuController.Start() to skip Title and
         // land directly on the correct Panel when returning from Gameplay (Pause Menu / SUCCESS
         // Result "Stage Select"). Left null for an ordinary Title return - MainMenuController

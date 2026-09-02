@@ -28,7 +28,8 @@ namespace Domino.Menu
     {
         public static OnlineSessionController Instance { get; private set; }
 
-        private const int MaxPlayers = 4;
+        public const int MaxPlayersPublic = 4;
+        private const int MaxPlayers = MaxPlayersPublic;
         private const int MinPlayersToStart = 2;
 
         [Header("Online Create Panel")]
@@ -60,6 +61,10 @@ namespace Domino.Menu
         private Coroutine _waitForSessionStateRoutine;
 
         public bool IsHost => _session != null && _session.IsHost;
+
+        // Step 12.1.1 (Section 27): exposed so CharacterSelectController can show "Players: X / Y"
+        // without needing its own separate reference to the Session API.
+        public int PlayerCount => _session != null ? _session.PlayerCount : 0;
 
         private void Awake()
         {
@@ -297,6 +302,11 @@ namespace Domino.Menu
         private void OnSessionJoinedOrCreated()
         {
             GameSessionContext.IsOnline = true;
+            // Step 12.1.1 (Section 15/26): a fresh Create/Join always starts this Client's own
+            // local "have I picked a Character yet" flag at false - unlike a Pause -> Character
+            // Select return (which never calls this method again), a brand new Session has no
+            // prior valid Selection to carry over.
+            GameSessionContext.HasSelectedCharacterThisSession = false;
             MainMenuController.Instance.ShowState(MenuState.OnlineRoom);
             RehydrateSession();
         }

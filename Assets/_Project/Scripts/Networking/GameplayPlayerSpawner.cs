@@ -121,11 +121,19 @@ namespace Domino.Networking
 
                 // Step 12.1 (Section 23): Server-authoritative Character assignment, applied
                 // right after Spawn. Single Player has exactly one Client (this Host itself), so
-                // its own local GameSessionContext.SelectedCharacterId is authoritative directly;
-                // Online resolves per-Client via NetworkSessionState's Server-side selection map
-                // (Section 18) since multiple Clients cannot share one static field.
+                // its own local GameSessionContext.SelectedCharacterId is authoritative directly.
+                //
+                // Step 12.1.1 Bug B fix: Online used to resolve this via
+                // NetworkSessionState.Instance, a Scene-placed NetworkObject bound to
+                // MainMenu.unity - but this method only runs AFTER the Gameplay Scene has
+                // finished loading (OnLoadEventCompleted), by which point MainMenu (and its
+                // NetworkSessionState) is already unloaded/destroyed. Instance was always null
+                // here, so every Online Player silently fell back to Character 1. Resolving via
+                // PlayerCharacterSelectionStore instead - a Persistent component on this same
+                // GameObject's Scene (see that file) - fixes this, since it survives the Scene
+                // transition.
                 int characterId = GameSessionContext.IsOnline
-                    ? (NetworkSessionState.Instance != null ? NetworkSessionState.Instance.GetSelectedCharacterId(clientId) : 1)
+                    ? (PlayerCharacterSelectionStore.Instance != null ? PlayerCharacterSelectionStore.Instance.GetCharacterId(clientId) : 1)
                     : GameSessionContext.SelectedCharacterId;
 
                 PlayerCharacterVisual characterVisual = spawned.GetComponent<PlayerCharacterVisual>();

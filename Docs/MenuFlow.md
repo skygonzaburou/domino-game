@@ -224,7 +224,7 @@ sequenceDiagram
 
 ---
 
-## 11. Character Select(Step 12.1)
+## 11. Character Select(Step 12.1 / Step 12.1.1)
 
 Stage Selectの前に、PlayerがGameplayで使用するCharacterを選ぶ`CharacterSelectPanel`を追加しました。Character Catalog・Player側のVisual切り替えの詳細は`Docs/CharacterSystem.md`を、Online側のPer-player同期は`Docs/OnlineSession.md`「11. Character Select」を参照してください。本章はMenu Flow/Panel構成に絞って記載します。
 
@@ -242,7 +242,18 @@ Online:  ROOM(2人以上) → CHARACTER SELECT → STAGE SELECT(Host-only) → G
 `StageSelectController`と全く同じ形の責務分離です。`MainMenuController`はPanelの表示/非表示のみを行い、`CharacterSelectController`(`CharacterSelectPanel`にアタッチ)がCatalogからCard Gridを動的生成し、Single Player/Onlineの分岐を持ちます。
 
 - **Card Click**: `GameSessionContext.SelectedCharacterId`を即座に更新するだけ(Stage Selectへは進まない、既存のStage Card Clickとは異なる挙動)
-- **`STAGE SELECT`ボタン**: Single Playerは即座に`MenuState.StageSelect`へ、Onlineは`OnlineSessionController.OnStageSelectButtonClicked()`(Host-only)を呼ぶ
+- **`STAGE SELECT`ボタン**: Single Playerは即座に`MenuState.StageSelect`へ。Onlineは、Step 12.1.1で追加したAll-player Gate(全員選択済みの場合のみInteractable、下記)を通過後、Host Confirmation Dialogを経てから`OnlineSessionController.OnStageSelectButtonClicked()`(Host-only)を呼ぶ
+
+### All-player Gate と Host Confirmation(Step 12.1.1)
+
+Online限定。`CharacterSelectPanel`に`SelectionCountText`("Players: X / Y" / "Selected: X / Y")と`ConfirmationPanel`(半透明の背景 + DialogBox + Message + Yes/Noボタン、既存Panelの配色を踏襲)を追加しました。
+
+- 全Connected PlayerがCharacterを最低1回選択するまで、`STAGE SELECT`ボタンはHostであってもDisabledのまま("STAGE SELECT (Waiting)")
+- 全員選択済みになるとEnabledになりますが、押しても即座には進まず、`ConfirmationPanel`("All players have selected.\nProceed to Stage Select?")が表示される
+- Yes: `OnlineSessionController.OnStageSelectButtonClicked()`を呼び、実際にPhase遷移を要求
+- No: `ConfirmationPanel`を閉じるだけ - Selection状態は一切変化せず、全PlayerはCharacterを変更し続けられる
+
+Server側の詳細(`SelectedCount`のNetworkVariable同期、`PlayerCharacterSelectionStore`によるHasSelectedCharacter管理、Yes時の再Validation)は`Docs/OnlineSession.md`「11. Character Select」の「All-player Gate」を参照してください。
 
 ### Character Grid(5 × 4 = 20 Cards)
 
@@ -258,6 +269,19 @@ if (CurrentState == MenuState.CharacterSelect && GameSessionContext.IsOnline) re
 
 Client側だけがLocalにRoom画面へ戻ってしまうとSession Phase(全員で共有しているCharacterSelect Phase)と食い違うため、Leaveは既存のOnline Room Panelの`Leave`のみを経由させています。
 
+### 動作確認済み(Step 12.1.1、実際のHost+Client 2 Player)
+
+Step 12.1完了報告時点では同一Editorプロセスから2つの独立したRelay接続を張ることが困難としていましたが、Step 12.1.1では**開発者ご自身がMultiplayer Play Mode(MPPM)のPlayer 2を操作し、Claude(Host側操作)と共同で実際の2 Player Online Testを実施しました**(`Docs/MultiplayerTesting.md`の手順)。
+
+- Host/Client双方で正しくCharacter Select画面(20 Card)が表示されることを確認(Bug A修正確認)
+- Host=Character 1、Client=Character 2をそれぞれ選択 → `SelectedCount`が正しく`2/2`になり、Host側`STAGE SELECT`がEnabledになることを確認
+- Clientが選択後にCharacterを`9 → 3 → 9`と複数回変更しても`SelectedCount`が`2`のまま維持されることを確認(Section 22)
+- Host Confirmation DialogでNo → Character Selectのまま(状態変化なし)、再度STAGE SELECT → Yes → 両画面ともStage Selectへ遷移することを確認
+- Stage Select → Gameplay後、Host=Capsule・Client=Green BoyがHost画面・Client画面**両方**で一致して見えることを確認(Bug B修正確認、最重要)
+- Client(Green Boy)のIdle/Walkアニメーションが正常に見えることを確認
+
+途中、実装とは無関係のEditor Play Mode不安定化(`is_paused`のまま固まるTransition、Relay接続Timeout)に1度遭遇し、Host+Clientとも再接続してテストをやり直しました - 詳細と切り分けは`Docs/OnlineSession.md`「11. Character Select」を参照してください。
+
 ### 未確認事項
 
-実際の2台のClientによるOnline Character Select(それぞれ別Characterを選択→Host Stage Select→両画面でVisual一致確認)の直接End-to-End確認は、Step 9系と同じ制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)に加え、本Step実装中に長時間のPlay Modeサイクルを繰り返した結果、NetworkManager Shutdownが完了しない(`ShutdownInProgress`のまま固まる、UDP Port再Bind失敗)という環境側の不安定化にも遭遇したため、今回は未実施です。`GameSessionContext.ReturnDestination`によるCharacter Select遷移ロジック自体は、Shutdown chainを経由しない直接呼び出しで単体確認済みです。開発者ご自身での実機確認を推奨します。
+3人以上でのAll-player Gate確認、Late Join時の再Gate確認は今回未実施です(2 Playerのみ)。

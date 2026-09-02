@@ -141,14 +141,16 @@ Server-authoritative(Section 15)。`ServerSetCharacterId(int)`はServer-onlyで�
 
 ```csharp
 int characterId = GameSessionContext.IsOnline
-    ? (NetworkSessionState.Instance != null ? NetworkSessionState.Instance.GetSelectedCharacterId(clientId) : 1)
+    ? (PlayerCharacterSelectionStore.Instance != null ? PlayerCharacterSelectionStore.Instance.GetCharacterId(clientId) : 1)
     : GameSessionContext.SelectedCharacterId;
 
 PlayerCharacterVisual characterVisual = spawned.GetComponent<PlayerCharacterVisual>();
 characterVisual?.ServerSetCharacterId(characterId);
 ```
 
-Single Playerは接続ClientがHost自身1人だけのため`GameSessionContext.SelectedCharacterId`(static, Local)を直接使用します。OnlineはClientごとに異なる選択を持つため、Server側の`NetworkSessionState`(後述)から`clientId`単位で解決します。
+Single Playerは接続ClientがHost自身1人だけのため`GameSessionContext.SelectedCharacterId`(static, Local)を直接使用します。Onlineは`PlayerCharacterSelectionStore`(Step 12.1.1で追加、`Docs/OnlineSession.md`「11. Character Select」参照)から`clientId`単位で解決します。
+
+**Step 12.1.1で修正した重要なバグ**: Step 12.1では、ここを`NetworkSessionState.Instance.GetSelectedCharacterId(clientId)`(MainMenu.unityにScene配置されたNetworkObject)から読んでいましたが、`GameplayPlayerSpawner`がPlayerをSpawnするのはGameplay Sceneのロードが完了した**後**であり、その時点で`NetworkSessionState`は既に破棄されて`Instance == null`でした。結果、Online接続時は常にFallbackの`1`(Capsule)が使われ、全PlayerがCapsuleになる不具合が発生していました。詳細は`Docs/OnlineSession.md`を参照してください。
 
 ## PlayerAnimationController側の対応
 
@@ -177,4 +179,4 @@ Pause → Character Select → Confirm で戻った場合も、`GameSessionConte
 
 ## Online Per-player Selection
 
-`NetworkSessionState`(`OnlineSession.md`参照)がServer-only Dictionaryとして`ClientId → CharacterId`を保持します。各Clientは`RequestSelectCharacterRpc(int characterId)`で**自分自身の**選択だけをServerへ送信でき(Host-onlyではない、Section 16)、Server側でCatalog存在チェックのみ行います(Prefab参照等は一切送受信しません、Section 17)。詳細は`OnlineSession.md`「11. Character Select」を参照してください。
+`NetworkSessionState`(`OnlineSession.md`参照)がUI/RPCの入口として`RequestSelectCharacterRpc(int characterId)`を受け取ります。各Clientは**自分自身の**選択だけをServerへ送信でき(Host-onlyではない、Section 16)、Server側でCatalog存在チェックのみ行います(Prefab参照等は一切送受信しません、Section 17)。実際の`ClientId → CharacterId`データは、Step 12.1.1で`PlayerCharacterSelectionStore`(Persistent、`Docs/Networking.md`参照)へ移動しました - `NetworkSessionState`自身はMainMenu Sceneにのみ存在するため、そこに保持していたデータはGameplay Spawn時には既に消えていました(Step 12.1のBug、下記参照)。詳細は`OnlineSession.md`「11. Character Select」を参照してください。

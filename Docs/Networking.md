@@ -503,6 +503,14 @@ private void HandleLoadEventCompleted(string sceneName, LoadSceneMode loadSceneM
 
 `SampleScene.unity`の`StartArea`内に`PlayerSpawnPoints`(空の親、`Architecture.md`「3. Scene構成」参照)を配置し、その子に`SpawnPoint_1`〜`SpawnPoint_4`(最大4人分、互いに重ならない座標)を用意しました。`GameplayPlayerSpawner`は`clientsCompleted`の**配列内Index**(接続順ではなく、そのScene Load完了通知内での並び順)を`spawnPoints.Length`で割った剰余でSpawn Pointを割り当てます。PlayerがどのSpawn Pointに出るかをClient自身が選ぶことはできません(Server/Host側が一方的に決定する、Deterministic Assignment)。
 
+4. **Persistent Session-level Data: `PlayerCharacterSelectionStore`(Step 12.1.1)**
+
+`GameplayPlayerSpawner`と同じ`MainMenu.unity`の`NetworkManager` GameObjectに常駐する、もう1つのMonoBehaviour(`NetworkBootstrap`と同じGameObject上に居るため、そのGameObjectの`DontDestroyOnLoad`にただ乗りする形でPersistent)。`ClientId → CharacterId`とHasSelectedCharacterをServer-only Dictionary/HashSetで保持し、Menu ⇄ Gameplayの往復を含む**Application全体のLifetimeを通じて**生存します。
+
+**発見した重要なバグ(Step 12.1 Bug B)**: Character Select機能を実装した当初、この役割を`NetworkSessionState`(MainMenu.unityにScene配置された`NetworkObject`、上記の`GameFlowManager`と対になる設計)に持たせていました。しかし`NetworkSessionState`は`NetworkManager`と異なり`DontDestroyOnLoad`ではなく、Gameplay Sceneへ遷移した時点で(他のMainMenu Scene要素と一緒に)破棄されます。`GameplayPlayerSpawner.HandleLoadEventCompleted`はGameplay SceneのLoadが完了した**後**に実行されるため、この時点で`NetworkSessionState.Instance`は既に`null`でした。結果、Online接続時のCharacter選択は常に読み取れず、Fallbackの`Character 1`(Capsule)が全員に適用されていました - Single Playerでは問題が起きなかったのは、そちらが`GameSessionContext`(Scene非依存のstatic、第6章のStage Selectと同じ仕組み)を直接使っており、この罠に触れていなかったためです。
+
+`PlayerCharacterSelectionStore`をPersistent NetworkManager側へ配置したことで、Scene遷移の前後を問わず同じインスタンスが生存し続け、`GameplayPlayerSpawner`が正しくCharacter Selectionを読み取れるようになりました。`NetworkSessionState`は引き続きUI/RPCの入口(Character Select画面がLiveの間だけ存在すればよい役割)として使われますが、実データの保持先ではなくなっています。詳細は`Docs/CharacterSystem.md`・`Docs/OnlineSession.md`「11. Character Select」を参照してください。
+
 ### 動作確認済み(Runtime Test, Step 9.2)
 
 - **Root Cause再現**: 上記のY座標推移(-149 → -937)を修正前のコードで実測により再現し、原因を特定

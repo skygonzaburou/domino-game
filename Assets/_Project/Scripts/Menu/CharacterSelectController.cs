@@ -8,6 +8,10 @@ namespace Domino.Menu
     // Step 12.1. Mirrors StageSelectController's structure closely: owns the Character grid
     // content and the Single Player "select and continue" vs Online "each Player selects
     // independently, Host advances" duality. MainMenuController only ever shows/hides this Panel.
+    //
+    // Step 12.1.1: Online now gates on every connected Player having selected at least once
+    // (Section 14-30) before the Host can even attempt Stage Select, and the Host must explicitly
+    // confirm via a Yes/No dialog once everyone has.
     public class CharacterSelectController : MonoBehaviour
     {
         [SerializeField] private CharacterCatalog catalog;
@@ -19,23 +23,40 @@ namespace Domino.Menu
         [SerializeField] private Button stageSelectButton;
         [SerializeField] private TextMeshProUGUI stageSelectButtonText;
 
+        [Header("Online Player/Selection Count (Step 12.1.1)")]
+        [SerializeField] private TextMeshProUGUI selectionCountText;
+
+        [Header("Host Confirmation (Step 12.1.1)")]
+        [SerializeField] private GameObject confirmationPanel;
+        [SerializeField] private TextMeshProUGUI confirmationMessageText;
+        [SerializeField] private Button confirmYesButton;
+        [SerializeField] private Button confirmNoButton;
+
         private readonly List<Button> _spawnedCards = new List<Button>();
         private readonly List<int> _spawnedCardCharacterIds = new List<int>();
+
+        private void Awake()
+        {
+            if (confirmYesButton != null) confirmYesButton.onClick.AddListener(OnConfirmYes);
+            if (confirmNoButton != null) confirmNoButton.onClick.AddListener(OnConfirmNo);
+        }
 
         private void OnEnable()
         {
             Populate();
             RefreshSelectionHighlight();
+            SetActive(confirmationPanel, false);
 
             if (selectionStatusText != null) selectionStatusText.gameObject.SetActive(GameSessionContext.IsOnline);
+            if (selectionCountText != null) selectionCountText.gameObject.SetActive(GameSessionContext.IsOnline);
             if (GameSessionContext.IsOnline) RefreshOnlineGating();
         }
 
         private void Update()
         {
-            // Online-only: Host-only Stage Select gating can change as Player Count changes -
-            // mirrors GameplayHUD's continuous-poll pattern for the same reason (no single event
-            // fires for "IsHost/PlayerCount changed" here).
+            // Online-only: Host-only Stage Select gating can change as Player Count/Selection
+            // Count changes - mirrors GameplayHUD's continuous-poll pattern for the same reason
+            // (no single event fires for "IsHost/PlayerCount changed" here).
             if (GameSessionContext.IsOnline) RefreshOnlineGating();
         }
 
@@ -69,10 +90,11 @@ namespace Domino.Menu
             }
         }
 
-        // Section 8: a click only ever changes SelectedCharacterId (local highlight, optimistic)
-        // - it never immediately advances to Stage Select, Single Player or Online alike. Online
-        // additionally informs the Server so it can resolve this Client's pick at Gameplay Player
-        // Spawn time (Section 15-18).
+        // Section 8/17/22: a click always updates SelectedCharacterId (local highlight,
+        // optimistic) and never immediately advances to Stage Select. Online additionally informs
+        // the Server (which tracks HasSelectedCharacter separately - Section 15) so it can resolve
+        // this Client's pick at Gameplay Player Spawn time, and remains changeable at any point
+        // up until the Host's Stage Select Confirmation actually fires (Section 22).
         private void OnCharacterCardClicked(CharacterDefinition character)
         {
             GameSessionContext.SelectedCharacterId = character.CharacterId;
@@ -80,14 +102,14 @@ namespace Domino.Menu
 
             if (GameSessionContext.IsOnline)
             {
+                GameSessionContext.HasSelectedCharacterThisSession = true;
                 NetworkSessionState.Instance?.RequestSelectCharacterRpc(character.CharacterId);
             }
         }
 
-        // Section 9/22/36: the actual "next" action - Single Player advances immediately, Online
-        // is Host-only (re-checked here defensively, matching every other Host-only action in
-        // this project) and lets NetworkSessionState.PhaseChanged move every Client's Menu
-        // together (OnlineSessionController.HandlePhaseChanged).
+        // Section 9/21/36: Single Player advances immediately. Online now shows a Host
+        // Confirmation first (Section 21) instead of advancing directly - the actual Phase
+        // Transition only happens from OnConfirmYes.
         public void OnStageSelectButtonClicked()
         {
             if (!GameSessionContext.IsOnline)
@@ -96,7 +118,25 @@ namespace Domino.Menu
                 return;
             }
 
+            if (OnlineSessionController.Instance == null || !OnlineSessionController.Instance.IsHost) return;
+
+            if (confirmationMessageText != null) confirmationMessageText.text = "All players have selected.\nProceed to Stage Select?";
+            SetActive(confirmationPanel, true);
+        }
+
+        // Section 24: the actual Server call (and its own independent re-validation) only happens
+        // here - Yes is the single point where Character Selection for this Attempt is committed.
+        private void OnConfirmYes()
+        {
+            SetActive(confirmationPanel, false);
             OnlineSessionController.Instance?.OnStageSelectButtonClicked();
+        }
+
+        // Section 23: No just closes the dialog - no Selection/HasSelected change, Stage Select
+        // stays available, every Player can keep changing their Character.
+        private void OnConfirmNo()
+        {
+            SetActive(confirmationPanel, false);
         }
 
         private void RefreshSelectionHighlight()
@@ -118,23 +158,62 @@ namespace Domino.Menu
             }
         }
 
-        // Section 20/32: the "STAGE SELECT" Button that advances everyone is Host-only when
-        // Online - a Client sees it Disabled with a "(Host Only)" label, same pattern as
-        // GameplayHUD's Pause Stage Select gating. Character Cards themselves are NOT gated here
-        // - every connected Player (Host and Client alike) can always pick their own Character
-        // (Section 16).
+        // Section 18-20/26/27: the All-player Gate. stageSelectButton is only ever interactable
+        // for the Host once every currently-connected Player has selected at least once - Character
+        // Cards themselves are never gated here (Section 16: Host and Client alike can always pick
+        // their own Character, right up until the Host's Confirmation actually commits).
         private void RefreshOnlineGating()
         {
             bool isHost = OnlineSessionController.Instance != null && OnlineSessionController.Instance.IsHost;
+            int selectedCount = NetworkSessionState.Instance != null ? NetworkSessionState.Instance.SelectedCount : 0;
+            int totalCount = OnlineSessionController.Instance != null ? OnlineSessionController.Instance.PlayerCount : 0;
+            bool allSelected = totalCount > 0 && selectedCount >= totalCount;
 
-            if (stageSelectButton != null) stageSelectButton.interactable = isHost;
-            if (stageSelectButtonText != null) stageSelectButtonText.text = isHost ? "STAGE SELECT" : "STAGE SELECT (Host Only)";
+            if (selectionCountText != null)
+            {
+                selectionCountText.text = $"Players: {totalCount} / {OnlineSessionController.MaxPlayersPublic}\nSelected: {selectedCount} / {totalCount}";
+            }
+
+            if (stageSelectButton != null) stageSelectButton.interactable = isHost && allSelected;
+            if (stageSelectButtonText != null)
+            {
+                stageSelectButtonText.text = !isHost
+                    ? "STAGE SELECT (Host Only)"
+                    : (allSelected ? "STAGE SELECT" : "STAGE SELECT (Waiting)");
+            }
+
             if (selectionStatusText != null)
             {
-                selectionStatusText.text = isHost
-                    ? "Select your Character, then press STAGE SELECT"
-                    : "Select your Character. Waiting for the host to proceed...";
+                selectionStatusText.text = BuildStatusText(isHost, allSelected);
             }
+        }
+
+        // Section 19/20/26: Host and Client see different framing of the same underlying state.
+        private string BuildStatusText(bool isHost, bool allSelected)
+        {
+            bool hasSelectedSelf = GameSessionContext.HasSelectedCharacterThisSession;
+
+            if (isHost)
+            {
+                return allSelected
+                    ? "All players have selected."
+                    : "Waiting for all players to choose a character...";
+            }
+
+            if (allSelected) return "All players selected.\nWaiting for the host...";
+            if (hasSelectedSelf) return $"Selected: {ResolveDisplayName(GameSessionContext.SelectedCharacterId)}\nWaiting for other players...";
+            return "Choose your character.";
+        }
+
+        private string ResolveDisplayName(int characterId)
+        {
+            CharacterDefinition definition = catalog != null ? catalog.FindById(characterId) : null;
+            return definition != null ? definition.DisplayName : characterId.ToString();
+        }
+
+        private static void SetActive(GameObject go, bool active)
+        {
+            if (go != null && go.activeSelf != active) go.SetActive(active);
         }
     }
 }

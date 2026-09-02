@@ -307,6 +307,10 @@ Stage Selectと全く同じパターンで、Onlineの間だけ`NetworkManager.S
 - 「Yes」確定後、`GameSessionContext.ReturnDestination = MenuState.CharacterSelect`が正しくセットされ、MainMenu再Load後の`MainMenuController.Start()`がCharacterSelectPanelを直接表示することを確認(Shutdown Chainを経由しない直接呼び出しでの単体確認)
 - Character 2(GreenBoy)でGameplayに入った状態からPause → Character Select → Character 1(Classic)を選び直し→Stage Select→Gameplayで、実際にGreenBoy→Capsuleへ切り替わることを確認
 
+Step 12.1.1で、Character Selection Data自体の保持先が`NetworkSessionState`(Scene-bound)から`PlayerCharacterSelectionStore`(Persistent、`Docs/Networking.md`参照)へ移動しました。Pause → Character Select復元時の`MarkAllConnectedAsSelected()`(第9章「Session Phaseの拡張」参照)もこのPersistent Storeに対して動作するため、Onlineで一度Gameplayへ入ったPlayerのSelectionは、Menu ⇄ Gameplayを何度往復しても正しく保持され続けます。
+
 ### 未確認事項
 
-本Step実装中、長時間のPlay Modeサイクル(Single Player開始・停止を多数回繰り返す自動テスト)により、`NetworkManager.Shutdown()`が`ShutdownInProgress`のまま完了せず、後続の`StartHost()`がUDP Port再Bind失敗で失敗するという環境側の不安定化に複数回遭遇しました(Editor自体が`Play Mode Paused`状態に予期せず入る事象も併発)。そのため、「実際にPause → Character Select (C) → Confirm → Shutdown → OnClientStopped → MainMenu」という完全なEnd-to-Endの連続クリックを、Shutdown Chainを含めて最後まで安定して再現することはできませんでした。`ReturnDestination`によるMainMenu側の遷移ロジック自体は上記の通り単体確認済みですが、Shutdown Chain部分は`RequestReturnToStageSelect()`(Step 10Bで実機確認済み)と全く同じコードパスを再利用しているため、動作すると判断しています。Online版(Host-only Gating含む)の実機確認も同様の制約で未実施です。開発者ご自身での実機確認を推奨します。
+本Step(Step 12.1)実装中、長時間のPlay Modeサイクル(Single Player開始・停止を多数回繰り返す自動テスト)により、`NetworkManager.Shutdown()`が`ShutdownInProgress`のまま完了せず、後続の`StartHost()`がUDP Port再Bind失敗で失敗するという環境側の不安定化に複数回遭遇しました(Editor自体が`Play Mode Paused`状態に予期せず入る事象も併発)。そのため、「実際にPause → Character Select (C) → Confirm → Shutdown → OnClientStopped → MainMenu」という完全なEnd-to-Endの連続クリックを、Shutdown Chainを含めて最後まで安定して再現することはできませんでした。`ReturnDestination`によるMainMenu側の遷移ロジック自体は上記の通り単体確認済みですが、Shutdown Chain部分は`RequestReturnToStageSelect()`(Step 10Bで実機確認済み)と全く同じコードパスを再利用しているため、動作すると判断しています。
+
+Step 12.1.1では、開発者ご自身とのHost+Client 2 Player実機Testを実施し(`Docs/OnlineSession.md`「11. Character Select」参照)、Room → Character Select → Stage Select → Gameplayという**Forward方向**のFlow(Bug A/Bの根本原因と修正確認が主目的)は実機確認済みです。ただし**Pause → Character Selectという戻り方向のOnline Flow自体の実機End-to-End確認(Host-only Gating含む)は、今回も未実施のままです**。ロジックは`RequestReturnToStageSelect()`と同一パターンのコードパス、およびPersistent Storeによる復元ロジック(上記)に基づいており動作すると判断していますが、開発者ご自身での実機確認を推奨します。

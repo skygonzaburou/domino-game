@@ -1338,3 +1338,60 @@ Stage Selectの前にCharacter Select画面を追加し、Player Gameplay Archit
 - 実際の2人以上でのOnline Character Select確認(上記参照、最優先)
 - Pause → Character SelectのNetworkManager Shutdown Chainを含む完全End-to-End確認(環境を再起動した上での再検証を推奨)
 - 次のStepでCharacter 3以降を別Humanoid Characterへ差し替える際の、Character Select/Session側の境界(CharacterId/CharacterDefinitionのみを知り、GreenBoy固有のAnimation名等は一切参照していないことを確認済み)の実際の拡張性検証
+
+---
+
+## Step 12.1.1: Online Character Select Sync / Selection Gate Fix
+
+開発者ご自身によるHost+Client実機Testで発見された、Step 12.1のOnline固有Bug 2件(Client側でCharacter Select画面が表示されない/Character Selectionが全員Capsuleにfallbackする)を修正し、加えて「全PlayerがCharacterを選択するまでStage Selectへ進めない」All-player Gateを追加しました。Character System(GreenBoy Animation/Humanoid Avatar等)・既存Gameplay・既存Networking Framework(NGO/Relay/Session API/Late Join Lock)は意図的に変更していません。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)、[Docs/OnlineSession.md](OnlineSession.md)「11. Character Select」、[Docs/MenuFlow.md](MenuFlow.md)「11. Character Select」、[Docs/PauseSystem.md](PauseSystem.md)「11. Pause → Character Select」、[Docs/Networking.md](Networking.md)を参照してください。
+
+### Root Cause
+
+- **Bug B(Character SelectionがGameplayで全員Capsuleになる)**: `NetworkSessionState`(MainMenu.unityにScene配置されたNetworkObject、`DontDestroyOnLoad`ではない)にCharacter Selectionを保持していたため、`GameplayPlayerSpawner`がGameplay Scene Load完了後にPlayerをSpawnする時点では、`NetworkSessionState`は既に破棄されて`Instance == null`になっていました。結果、Online接続時は常にFallbackの`Character 1`が全Playerへ適用されていました。Single Playerが無事だったのは、Scene非依存の`GameSessionContext`(static)を直接使う別経路のためです
+- **Bug A(Client側でCharacter Select画面が表示されない)**: 断定的な原因は特定できていませんが、実装時に発見した「Inactiveな`CharacterCardTemplate`がGrid Layout対象に含まれ21枚分の位置計算がされる」バグ(Host/Clientの解像度差で症状の出方が変わりうる)が最有力の説明です。このLayoutバグを修正した状態で実機再テストしたところ、Host/Client双方とも正常にCharacter Select画面が表示されることを確認しました
+
+### 実装済み
+- **`PlayerCharacterSelectionStore.cs`新規作成**(`Domino.Networking`名前空間、`GameplayPlayerSpawner`と同じPersistentな"NetworkManager" GameObjectに常駐): `ClientId → CharacterId`と`HasSelectedCharacter`をServer-only Dictionary/HashSetで保持。Menu ⇄ Gameplayの往復を含むApplication全体のLifetimeを通じて生存するため、Bug Bの根本原因を解消。Client切断時のCleanup(`ClientSelectionRemoved`イベント)も担う
+- **`GameplayPlayerSpawner.cs`の修正**: Character ID解決を`NetworkSessionState.Instance.GetSelectedCharacterId()`から`PlayerCharacterSelectionStore.Instance.GetCharacterId()`へ変更(Bug Bの直接修正)
+- **`NetworkSessionState.cs`の再設計**: Character Selection実データの保持責務を`PlayerCharacterSelectionStore`へ委譲し、自身はUI/RPCの入口(`RequestSelectCharacterRpc`)としてのみ機能するよう整理。`NetworkVariable<int> SelectedCount`(All-player Gate用の集計値)を追加。`HostAdvanceToStageSelect`/`HostTryStartGame`にAll-player Gateの再Validationを追加。Pause → Character Select復元時(`OnNetworkSpawn`)に`PlayerCharacterSelectionStore.MarkAllConnectedAsSelected()`を呼ぶよう変更
+- **`CharacterSelectController.cs`の拡張**: All-player Gate対応のUI(`SelectionCountText`で"Players: X/Y, Selected: X/Y"表示、Host/Client別のStatus Text文言)、Host Confirmation Dialog(`ConfirmationPanel`、Yes/No)を追加。`GameSessionContext.HasSelectedCharacterThisSession`(Client Local、Optimistic)でClient自身の選択済み状態をUI表示用に追跡
+- **`OnlineSessionController.cs`の拡張**: `PlayerCount`Public Property追加(CharacterSelectControllerのUI用)。`OnSessionJoinedOrCreated()`で`HasSelectedCharacterThisSession`をリセット
+- **`GameSessionContext.cs`に`HasSelectedCharacterThisSession`を追加**: `SelectedCharacterId`とは意図的に分離(Section 15) - Character 1がFallback/DefaultだからといってCharacter Select突入時点で「選択済み」扱いにしないため
+- **MainMenu.unity**: `CharacterSelectPanel`へ`SelectionCountText`・`ConfirmationPanel`(DialogBox+MessageText+YesButton+NoButton)を新規UI追加。Persistent"NetworkManager" GameObjectへ`PlayerCharacterSelectionStore`を追加
+
+### 動作確認済み(実際のHost+Client 2 Player、MPPM経由)
+開発者ご自身がPlayer 2(MPPM Virtual Player)を操作し、Claude(Host側をMCP経由で操作)と共同で実施しました。
+
+- **Bug A修正確認**: Host/Client双方で正しくCharacter Select画面(20 Card)が表示されることを確認
+- **Selection同期**: Host=Character 1、Client=Character 2を選択 → Server側で`SenderClientId`/`RequestedCharacterId`/`SelectedCount`が正しく記録されることを確認(2/2)
+- **All-player Gate**: 両者選択完了後、"Players: 2/4 Selected: 2/2"・"All players have selected."がHost画面に表示され、`STAGE SELECT`ボタンがEnabledになることを確認
+- **Character変更(Section 22)**: 全員選択済み後もClientがCharacterを`9 → 3 → 9`と複数回変更でき、その間`SelectedCount`が`2`のまま維持される(Stage Selectが引き続き有効)ことを確認
+- **Host Confirmation**: STAGE SELECT押下でConfirmation Dialog("All players have selected.\nProceed to Stage Select?")表示を確認。No → Character Selectのまま状態変化なし。再度STAGE SELECT → Yes → 両画面ともStage Selectへ遷移することを確認
+- **Bug B修正確認(最重要)**: Stage Select → Gameplayで、`GameplayPlayerSpawner`のSpawn処理が`ClientId=0 → ResolvedCharacterId=1(WasFallback=False)`・`ClientId=1 → ResolvedCharacterId=2(WasFallback=False)`と正しく解決することを一時的なDiagnostic Logで確認(Section 1の指示通り、最終Commit前に削除済み)。Host画面・Client画面**両方**で「Host=Capsule, Client=Green Boy」が一致して見えることを実機確認(全員Capsuleになる旧Bugが解消)
+- **Animation**: Client(Green Boy)のIdle/Walkアニメーションが相手画面(Host)でも正常に見えることを確認
+- Console: 上記テスト範囲でProject由来のError 0件(テスト中断時のRelay Timeout関連ログは環境起因、下記参照)
+
+### Single Player Regression確認済み
+Character Select Gateを追加していないこと(Section 32)を確認 - TIME ATTACK → CHARACTER SELECT → STAGE SELECTへ即座に進めること(Confirmation Dialogなし)を再確認しました。
+
+### 発見した環境側の問題(コードバグではない)
+テスト中、Editor Play Modeが`is_paused=true`のまま固まる(`playmode_transition`から進まない)事象に2回遭遇し、1回はNetworkManagerのRelay接続自体がTimeoutして切断されました(`manage_editor pause`のトグルで復帰、再接続してテストを継続)。Step 12完了報告時点から蓄積していた、長時間・多数回のPlay Modeサイクルによる既知の環境不安定化パターンで、本Stepの実装コードには起因しません。
+
+### 未実装/確認できなかった事項
+- Bug Aの断定的な原因確認(Layout Bug修正後に再発しないことのみ確認、壊れた状態そのものを再現しての直接検証はできていません)
+- 3人以上でのAll-player Gate確認(今回2 Playerのみ)
+- Late Join時の再Gate・Disconnect時の`SelectedCount`減算の実機確認(コードレビューと2 Player Testの範囲内での確認に留まる)
+- Online Pause → Character Select(戻り方向)自体のEnd-to-End実機確認(今回はRoom → Character Select → Stage Select → Gameplayの順方向Flowを中心にテストしました)
+
+### 将来確認が必要な事項
+- 3人以上でのAll-player Gate確認
+- Online Pause → Character Selectの戻り方向End-to-End確認
+- Late Join Policy自体の見直し(現状維持、Section 30の指示通り大きな変更はしていません)
+
+### Console
+- Error: 0件(最終確認時点、Diagnostic Log削除後)
+- Warning: 既存の無関係な警告のみ(`[Netcode] OnApplicationQuit`等、Step 12から継続)
+
+### Git
+- Step 12(`3250120`)・Step 12.1(`71b2c4d`)は本Step開始時点で共にPush済みであることを確認
+- 本Step: 下記Completion Report参照
