@@ -4674,6 +4674,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Domino.GameFlow.CheckpointZone
   fallenAngleThreshold: 60
+  preExistingTiltExclusionThreshold: 10
   checkpointIndex: 1
 --- !u!65 &1986347287
 BoxCollider:
