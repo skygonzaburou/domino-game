@@ -9,8 +9,25 @@ namespace Domino.Player
     // State (PlayerMotor's Move Input/Grounded/Jumped, GameFlowManager.CurrentPhase) and writes
     // Animator parameters - never writes back into Gameplay Logic (Section 19). Runs only on the
     // Owner (mirrors PlayerMotor.ReadInput's own IsOwner gating); NetworkAnimator (AuthorityMode
-    // = Owner, on GreenBoy's Model) replicates the resulting Animator parameter/state to every
-    // other Client automatically, so no NetworkVariable/RPC is added here (Section 20/21).
+    // = Owner) replicates the resulting Animator parameter/state to every other Client
+    // automatically, so no NetworkVariable/RPC is added here (Section 20/21).
+    //
+    // Step 12.1.2: NetworkAnimator lives on the Player Root (sibling of this component), NOT on
+    // GreenBoy's Model, even though its Animator reference still points at GreenBoy's Animator
+    // there. Root Cause this fixes: NGO's NetworkObject.InvokeBehaviourNetworkSpawn() skips
+    // OnNetworkSpawn() for any child NetworkBehaviour whose GameObject is not
+    // activeInHierarchy at the exact moment Spawn runs (logged as a Warning, not an Error - easy
+    // to miss). PlayerCharacterVisual's own OnNetworkSpawn() applies its NetworkVariable's
+    // *default* value (Character 1/Capsule) immediately, before GameplayPlayerSpawner has a
+    // chance to call ServerSetCharacterId() with the real resolved Id - so for any Character
+    // 2-20 selection, GreenBoyVisual (and the NetworkAnimator that used to live under it) was
+    // toggled Inactive during that very same Spawn pass, permanently skipping NetworkAnimator's
+    // own OnNetworkSpawn() and leaving its internal state handler null for the rest of that
+    // NetworkObject's lifetime (surfacing as a NullReferenceException from inside NetworkAnimator
+    // itself the first time SetTrigger() was called, and Continuous Animator Parameter sync never
+    // starting for Remote observers at all). Since the Player Root is always active regardless of
+    // which Character Visual is currently shown, keeping NetworkAnimator there guarantees its own
+    // OnNetworkSpawn() always runs.
     [RequireComponent(typeof(PlayerMotor))]
     public class PlayerAnimationController : NetworkBehaviour
     {
@@ -40,7 +57,11 @@ namespace Domino.Player
         private void Awake()
         {
             _motor = GetComponent<PlayerMotor>();
-            _networkAnimator = animator != null ? animator.GetComponent<NetworkAnimator>() : null;
+
+            // Step 12.1.2: NetworkAnimator now lives on the Player Root (see field/class comment
+            // above) precisely so it is always active in hierarchy at Spawn time - it is no
+            // longer a sibling of animator, so it must be looked up on this GameObject instead.
+            _networkAnimator = GetComponent<NetworkAnimator>();
         }
 
         public override void OnNetworkSpawn()

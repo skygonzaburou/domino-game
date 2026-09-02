@@ -1395,3 +1395,71 @@ Character Select Gateを追加していないこと(Section 32)を確認 - TIME 
 ### Git
 - Step 12(`3250120`)・Step 12.1(`71b2c4d`)は本Step開始時点で共にPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 12.1.2: Fix GreenBoy Jump and Network Animation Sync
+
+開発者ご自身の実プレイで発見された、GreenBoy Characterの2つのAnimation Regression(Single PlayerでJump Animationが再生されない/OnlineでRemote PlayerのGreenBoy Animationが同期されずTransformだけ滑る)を、推測ではなくRuntime上のReflection調査とNGOソースコード読解によって根本原因を特定した上で修正しました。Animator Controller・Jump Physics・Character Selection/Online Assignment・既存Networking Framework(Relay/Session/Transport/NetworkTransform等)は変更していません。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)「NetworkAnimatorの配置(Step 12.1.2)」、[Docs/Networking.md](Networking.md)「25. NetworkBehaviourは非ActiveなGameObject上では動作しない」を参照してください。
+
+### Root Cause
+
+- **Bug A(Single Player Jump)/Bug B(Online Remote Animation)共通の原因**: NGOの`NetworkObject.InvokeBehaviourNetworkSpawn()`は、Spawn時に各`NetworkBehaviour`について`gameObject.activeInHierarchy`を確認し、非ActiveであればWarningログのみで`OnNetworkSpawn()`の呼び出しを永久にSkipします。Step 12.1でCharacter Selectionを導入した際、`NetworkAnimator`は`GreenBoyVisual/Model`(Character 1選択時は非Activeになる`GreenBoyVisual`の子)に置かれたままでした。さらに`PlayerCharacterVisual.OnNetworkSpawn()`は、`GameplayPlayerSpawner`が実際のCharacter IDを設定する前に、同じSpawnパス中で`NetworkVariable<int> _characterId`のDefault値(`FallbackCharacterId = 1` = Capsule)を使って`ApplyVisual(1)`を即座に実行するため、GreenBoy(Character 2〜20)選択時でもSpawnの瞬間には一時的に`GreenBoyVisual`が非Activeとなり、`NetworkAnimator`の`OnNetworkSpawn()`が呼ばれないまま終わっていました
+- **表面化した2つの症状**: `NetworkAnimator`内部のPrivateフィールド`m_NetworkAnimatorStateChangeHandler`(`OnNetworkSpawn()`内でのみ初期化)が`null`のままとなり、(1) Jump時の`NetworkAnimator.SetTrigger()`が`NullReferenceException`を投げてJump Animationが再生されない(Bug A、Physics自体は正常)、(2) Remote Client向けのContinuous Animator Parameter同期(Walk/Run/Jump含む)も一切開始しない(Bug B、NetworkTransformによる位置同期だけは別コンポーネントのため正常に見える)という2つの一見無関係な症状が、実は同一原因から発生していました
+- **発見が難しかった理由**: `NetworkAnimator.IsSpawned`は外側の`NetworkObject`全体のSpawn状態を反映するだけで、この個別NetworkBehaviour自身の`OnNetworkSpawn()`が実際に走ったかどうかを示さないため、表面的なチェックでは正常に見えました。Reflectionで`m_NetworkAnimatorStateChangeHandler`を直接確認し、かつ`HandleJumped()`をReflection経由で呼び出して`TargetInvocationException.InnerException`を読むことで、初めてNGO内部の`NullReferenceException`という実際のエラーを特定できました
+
+### Fix
+
+- **`NetworkAnimator`をPlayer Rootへ移動**: `Player.prefab`を`PrefabUtility.LoadPrefabContents`で開き、`GreenBoyVisual/Model`から`NetworkAnimator`をDestroyし、Player Root上に新規追加(`AuthorityMode`は元の`Owner`のまま維持)。`Animator`参照は引き続き`GreenBoyVisual/Model`のAnimatorを指すCross-GameObject参照。Player Rootは常にActiveなため、Character Selectionに関わらず`NetworkAnimator.OnNetworkSpawn()`が確実に実行される
+- **`PlayerAnimationController.cs`の修正**: `Awake()`内の`_networkAnimator`解決を`animator.GetComponent<NetworkAnimator>()`(Animatorの兄弟を探す)から`GetComponent<NetworkAnimator>()`(自分自身と同じPlayer Root上を探す)へ変更。それ以外(`HandleJumped()`の`NetworkAnimator.SetTrigger()`呼び出し方法、`Update()`のIsOwner Gate、Active-state Guard)は無変更
+- Animator Controller自体、Jump Trigger送信方法、Jump Physics(Force/Rigidbody/Gravity/Ground Check/Space入力)、Character Selection/Online Assignmentロジック、Relay/Session/Transport/NetworkTransform等は一切変更していません
+
+### 実装済み
+
+- `Player.prefab`: `NetworkAnimator`をPlayer Rootへ移動(`GreenBoyVisual/Model`から削除)、`Animator`参照は`Model`のまま維持
+- `Assets/_Project/Scripts/Player/Animation/PlayerAnimationController.cs`: `Awake()`の`NetworkAnimator`参照解決ロジックを修正、Step 12.1.2 Root Cause/Fixの説明をClass Doc Commentへ追加
+
+### 動作確認済み(Single Player、実機Play Mode)
+
+- **Jump(Bug A修正確認)**: Space押下 → `PlayerMotor.Jumped`発火 → `NetworkAnimator.SetTrigger()`が例外なく実行 → Animator ControllerがJump Stateへ正しく遷移(`IsName("Jump") == true`)することを、Reflectionでの`m_NetworkAnimatorStateChangeHandler` null確認(修正前null → 修正後non-null)と、強制Animator Update+Screenshotの両方で確認
+- **Idle3/Idle8/Walk/Run Regression確認**: 修正後も既存の遷移が壊れていないことを確認
+- **Capsule(Character 1)でのError/Warning確認**: Player RootにNetworkAnimatorが常時存在するようになった後も、Capsule選択時にJumpをTriggerしてError/Warning/NullReferenceが一切発生しないことを確認
+- **Dance(SUCCESS Victory Animation) Regression確認**: `IsVictory=true`設定後、Dance Stateへ正しく遷移することを確認。Dance再生中もPlayer Root位置(`transform.position`)が完全に不変であること(`applyRootMotion = false`が維持されていること)を確認
+
+### 動作確認済み(Online、実機Host+Client 2 Player、MPPM経由)
+開発者ご自身がPlayer 2(MPPM Virtual Player)を操作し、Claude(Host側をMCP経由で操作)と共同で実施しました。途中1回、既知のEditor Play Mode不安定化(下記参照)によりRelay接続がTimeoutしたため、Roomを再作成して継続しました。
+
+- **Walk(Bug B修正確認)**: ClientがGreenBoyでWキーを保持 → Host側から見たRemote PlayerのAnimator状態が`Walk=True Speed=1`であることを確認(単なるTransform移動ではなくAnimation State自体が同期されていることを確認)。開発者ご自身のPlayer 2画面でも正常に見えることを確認
+- **Run**: ClientがShift+Wを保持 → Host側から見たRemote Playerが`Run=True Speed=1 IsRunning=True`であることを確認
+- **Jump**: ClientがSpaceを押下 → Host側から見たRemote Playerが空中で`Jump=True`(`normalizedTime≈0.90`)であることを確認。開発者ご自身のPlayer 2画面でも、Physics Jump・Jump Animationの両方が見えることを確認
+- Console: 上記テスト範囲でProject由来のError 0件
+
+### Character Combination確認
+
+Host=Capsule/Client=GreenBoyの組み合わせについては、本Step内での実機再テストは行っていません。ただし(1) Capsule選択時のError/Warning無し(Single Playerで確認済み)、(2) Capsule+GreenBoyの見た目Assignment自体はStep 12.1.1で既に実機確認済み、(3) 本Stepのアーキテクチャ変更(NetworkAnimatorの配置)はどのCharacterが選択されているかに関わらず同一の効果を持つ、という3点から、追加確認なしでも妥当と判断しました。
+
+### Prefab Verification(`Player.prefab`)
+
+`GetComponentsInChildren`による最終確認: `NetworkObject count=1`、`NetworkAnimator count=1`(Player Root上、`Animator`参照=`Model`、`AuthorityMode=Owner`)、`Animator count=1`(`Model`上)、Capsule Visual/GreenBoy Visualともに1つずつ、重複コンポーネントなし。
+
+### 発見した環境側の問題(コードバグではない)
+
+テスト中、Editor Play Modeが`is_paused=true`のまま固まる(`playmode_transition`から進まない)事象に1回遭遇し、今回はNetworkManagerのRelay接続自体がTimeoutして完全に切断されました(`ConnectedClientsIds.Count=0`)。MainMenuへ戻ってOnline Roomを新規作成(新しいJoin Code)することで復旧し、テストを継続しました。Step 12.1.1から継続する既知の環境不安定化パターンで、本Stepの実装コードには起因しません。
+
+### 未実装/確認できなかった事項
+
+- Host=Capsule/Client=GreenBoyの組み合わせでの実機再テスト(上記「Character Combination確認」参照、理由により省略)
+- Host自身がGreenBoyの場合のJump Animation Remote同期(今回はHost/Client双方GreenBoyでのWalk/Run/Jumpを確認したのみ)
+
+### 将来確認が必要な事項
+
+- Host=Capsule/Client=GreenBoyの組み合わせでの実機再テスト
+- 3人以上接続時のAnimation同期確認(今回は2 Playerのみ)
+
+### Console
+- Error: 0件(最終確認時点、Diagnostic Log削除後)
+- Warning: 既存の無関係な警告のみ(`[Netcode] OnApplicationQuit`等、Step 12から継続)。本Stepによる新規Warning(NetworkBehaviour登録関連含む)は0件
+
+### Git
+- Step 12.1.1完了時点(`e5858ff`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

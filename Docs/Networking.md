@@ -526,3 +526,23 @@ private void HandleLoadEventCompleted(string sceneName, LoadSceneMode loadSceneM
 
 - **実際の2台のClientによるEnd-to-End確認**: 第9.5章(OnlineSession.md第10章)から持ち越しの制約と同じく、同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難なため、Host自身の1接続によるシミュレーションのみで検証しました。開発者ご自身による実機確認を推奨します
 - 4人接続時のSpawn Point割り当て(3人目・4人目が正しく`SpawnPoint_3`/`SpawnPoint_4`に割り当てられるか)は、実際に4接続を同時に用意することが困難だったため未検証です。コード上は`clientIndex % spawnPoints.Length`のロジックで対応済みです
+
+---
+
+## 25. NetworkBehaviourは非ActiveなGameObject上では動作しない(Step 12.1.2)
+
+Step 12.1.2で、GreenBoy CharacterのJump AnimationとRemote同期が壊れるバグを調査した際に判明した、NGOの一般的な(Animation固有ではない)制約についてのメモです。将来他のNetworkBehaviourをCharacter Visualのような「Active/Inactiveが切り替わるGameObject」の配下に置こうとした場合に、同じ問題を再現しないための記録です。
+
+### 発見した制約
+
+NGOの`NetworkObject.InvokeBehaviourNetworkSpawn()`(Spawn時に各`NetworkBehaviour`の`OnNetworkSpawn()`を呼び出す内部処理)は、`ChildNetworkBehaviours`を走査する際、各要素について`childBehaviour.gameObject.activeInHierarchy`を確認します。**非ActiveであればWarningログを出すだけで`OnNetworkSpawn()`の呼び出し自体をSkipし、それ以降そのNetworkBehaviourインスタンスに対して二度と`OnNetworkSpawn()`は呼ばれません。** 同様のパターン(非Activeなら黙ってSkip)は、Ownership変更・Parent変更・PostSpawn・SessionSynchronized等、NGOの複数のSpawn関連処理で一貫して使われています。これは「Netcode for GameObjects does not support disabled NetworkBehaviours」というNGO自身の既知の設計制約です。
+
+厄介なのは、この失敗が**Errorではなく、見落としやすいWarningレベルのログ**でしか報告されない点と、`NetworkBehaviour.IsSpawned`プロパティが(このNetworkBehaviour自身の`OnNetworkSpawn()`が実際に走ったかどうかではなく)外側の`NetworkObject`全体のSpawn状態を反映するだけのため、`IsSpawned == true`という一見正常な値が返ってきてしまい、「壊れているように見えない」表面的な健全性チェックでは検出できない点です。実際に壊れているかどうかを確認するには、そのComponent固有の「`OnNetworkSpawn()`内でのみ初期化される内部状態」(`NetworkAnimator`の場合は`m_NetworkAnimatorStateChangeHandler`)をReflection等で直接調べる必要がありました。
+
+### なぜCharacter Selectionでこれが顕在化したか
+
+`PlayerCharacterVisual`(Player Root上のNetworkBehaviour)自身の`OnNetworkSpawn()`は、`NetworkVariable<int> _characterId`の**Default値**(`FallbackCharacterId = 1` = Capsule)を使って即座に`ApplyVisual(1)`を実行します。`GameplayPlayerSpawner`が実際に選択されたCharacter IDを`ServerSetCharacterId()`で書き込むのは、`NetworkObject.InstantiateAndSpawn()`(=このSpawnパス全体)が完全に完了した**後**です。そのため、GreenBoy(Character 2〜20)を選んでいたとしても、Spawnの瞬間には一時的に`GreenBoyVisual`が非Activeになり、当時その配下に置かれていた`NetworkAnimator`の`OnNetworkSpawn()`が永久にSkipされていました。
+
+### 設計ルール
+
+**NetworkBehaviourは、Active/Inactiveが動的に切り替わる可能性のあるGameObject配下に置いてはならない。** 常にActiveな階層(このProjectではPlayer Root)に置き、対象のComponent(Animatorなど)へは通常のSerialized Field経由でCross-GameObject参照する。詳細な修正内容は`Docs/CharacterSystem.md`「NetworkAnimatorの配置(Step 12.1.2)」を参照してください。

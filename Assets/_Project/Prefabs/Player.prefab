@@ -22,6 +22,7 @@ GameObject:
   - component: {fileID: 6331155280092293476}
   - component: {fileID: 4028667169719162356}
   - component: {fileID: 5139534909782632053}
+  - component: {fileID: 8014579632668234254}
   m_Layer: 9
   m_Name: Player
   m_TagString: Player
@@ -334,6 +335,54 @@ MonoBehaviour:
   visualRoots:
   - {fileID: 4755727045501810707}
   - {fileID: 4638160187024999606}
+--- !u!114 &8014579632668234254
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1210256795894551307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8d0727d5ae3244e3b569694d3912374, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.Components.NetworkAnimator
+  ShowTopMostFoldoutHeaderGroup: 1
+  NetworkAnimatorExpanded: 0
+  AuthorityMode: 1
+  m_Animator: {fileID: 8100202900944383317}
+  TransitionStateInfoList: []
+  AnimatorParameterEntries:
+    ParameterEntries:
+    - name: Speed
+      NameHash: -823668238
+      Synchronize: 1
+      ParameterType: 1
+    - name: IsRunning
+      NameHash: -887662580
+      Synchronize: 1
+      ParameterType: 4
+    - name: IsSlowWalk
+      NameHash: 1627644575
+      Synchronize: 1
+      ParameterType: 4
+    - name: IsIdleLong
+      NameHash: -1792678806
+      Synchronize: 1
+      ParameterType: 4
+    - name: Grounded
+      NameHash: 862969536
+      Synchronize: 1
+      ParameterType: 4
+    - name: JumpTrigger
+      NameHash: 113680519
+      Synchronize: 1
+      ParameterType: 9
+    - name: IsVictory
+      NameHash: -1802645191
+      Synchronize: 1
+      ParameterType: 4
+  AnimatorParametersExpanded: 0
 --- !u!1 &2210624771682651668
 GameObject:
   m_ObjectHideFlags: 0
@@ -598,7 +647,8 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: 1347771788756884661, guid: 5b803e34030b4a44d8b63cd280d695be, type: 3}
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []

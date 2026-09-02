@@ -1,10 +1,10 @@
-# Character System (Step 12 / Step 12.1)
+# Character System (Step 12 / Step 12.1 / Step 12.1.2)
 
-Player Root(`Rigidbody`/`CapsuleCollider`/`PlayerMotor`/`NetworkObject`/`NetworkTransform`等)は一切変更せず、旧CapsuleのVisualをMeshy AI製Humanoidキャラクター「GreenBoy」へ差し替えたSystem(Step 12)、およびPlayerが使用するCharacterをMain Menuで選べるようにしたCharacter Select機能(Step 12.1)についてのドキュメント。Menu側のPanel/Flowは`MenuFlow.md`、Online同期は`OnlineSession.md`、Pause Menuからの遷移は`PauseSystem.md`を参照してください。
+Player Root(`Rigidbody`/`CapsuleCollider`/`PlayerMotor`/`NetworkObject`/`NetworkTransform`等)は一切変更せず、旧CapsuleのVisualをMeshy AI製Humanoidキャラクター「GreenBoy」へ差し替えたSystem(Step 12)、Playerが使用するCharacterをMain Menuで選べるようにしたCharacter Select機能(Step 12.1)、およびそのCharacter Selectionの導入によって顕在化したAnimation Network Sync/Jumpのバグ修正(Step 12.1.2)についてのドキュメント。Menu側のPanel/Flowは`MenuFlow.md`、Online同期は`OnlineSession.md`、Pause Menuからの遷移は`PauseSystem.md`、NetworkAnimatorの配置に関する詳細は`Networking.md`を参照してください。
 
 ## 責務分離
 
-- **Player Root**(`Player.prefab`直下): Gameplay/Physics/Networkの唯一の権威。CapsuleCollider(radius=0.4, height=2, center=(0,1,0))、Rigidbody(mass=1)は無変更
+- **Player Root**(`Player.prefab`直下): Gameplay/Physics/Networkの唯一の権威。CapsuleCollider(radius=0.4, height=2, center=(0,1,0))、Rigidbody(mass=1)は無変更。**Step 12.1.2から`NetworkAnimator`もここに常駐**(下記「NetworkAnimatorの配置」参照)
 - **`Player/Visual`**: 旧Capsule + Nose。**Disable(非Active)のみで削除していない** — 将来Debug Visualとして即座に復元可能
 - **`Player/GreenBoyVisual`**: `Assets/_Project/Prefabs/Characters/GreenBoy.prefab`のInstance。Visual専用、Gameplay Logicを一切持たない
 - **`PlayerAnimationController.cs`**(`Domino.Player`名前空間、Player Root上): 既存Gameplay State(`PlayerMotor.MoveAxis`/`IsDashHeld`/`IsSlowWalkHeld`/`IsGrounded`/`Jumped`イベント、`GameFlowManager.CurrentPhase`)を**読み取るだけ**でAnimator Parameterを書き込む。Gameplay Logicへの書き込みは一切なし
@@ -15,10 +15,11 @@ Player Root(`Rigidbody`/`CapsuleCollider`/`PlayerMotor`/`NetworkObject`/`Network
 GreenBoy (root, empty)
 └─ Model (Meshy_AI_..._Character_output.fbx のInstance, localPosition Y=-0.04)
     ├─ Animator (Avatar = Humanoid, Apply Root Motion = false)
-    ├─ NetworkAnimator (Authority Mode = Owner)
     ├─ Armature (Humanoid Rig, Mixamo系標準Bone命名)
     └─ char1 (SkinnedMeshRenderer, Material = GreenBoy_Material)
 ```
+
+`NetworkAnimator`はStep 12ではこの`Model`上に置いていましたが、Step 12.1.2でPlayer Rootへ移動しました(下記「NetworkAnimatorの配置(Step 12.1.2)」参照)。`Model`には引き続き`Animator`本体のみが残ります。
 
 - Y = -0.04のOffsetは、FBXのBone座標(LeftToeBase ≈ Y0.04)から実測して、Feetが地面(Player root Y=0)に接するよう調整したもの
 - Modelの回転・Scaleは共にIdentity — Character FBXの`headfront`ボーン(Head相対+Z方向)・`RightHand`(+X側)を実測した結果、Meshyの元Modelは既にUnityの`transform.forward`(+Z)と一致する向きでExportされており、Player Rootとの向き合わせのためのRotation補正は不要だった
@@ -70,12 +71,24 @@ Dance → Idle3                   [!IsVictory]
 
 `Animator.applyRootMotion = false`をGreenBoy.prefab側で固定。Walking/Running/Jump等のClipがPlayer位置を動かすことは一切なく、移動は従来通り100% `PlayerMotor` → `Rigidbody` → `NetworkTransform`が担う。Play Modeでの検証時、Jump/Dance再生中もPlayer Root位置(`transform.position`)が完全に不変であることを確認済み。
 
-## Network同期(Section 20/21)
+## Network同期(Section 20/21、Step 12.1.2で配置修正)
 
-- `NetworkAnimator`(NGO 2.13.2, `Unity.Netcode.Components`)を`GreenBoy.prefab`の`Model`に追加。`AuthorityMode = Owner` — 既存の`NetworkTransform`/`PlayerMotor`と同じOwner-Authoritativeパターンに合わせた設定
+- `NetworkAnimator`(NGO 2.13.2, `Unity.Netcode.Components`)は**Player Root**に常駐(Step 12では`GreenBoy.prefab`の`Model`にあったが、Step 12.1.2で移動 — 理由は下記「NetworkAnimatorの配置(Step 12.1.2)」参照)。`Animator`参照は`GreenBoyVisual/Model`のAnimatorを指すCross-GameObject参照。`AuthorityMode = Owner` — 既存の`NetworkTransform`/`PlayerMotor`と同じOwner-Authoritativeパターンに合わせた設定
 - `PlayerAnimationController.Update()`は`IsOwner`のClientでのみAnimator Parameterを書き込み、それ以外のClientでは実行しない(`PlayerMotor.ReadInput()`と同じGating)。NetworkAnimatorがOwnerのAnimator状態を他Clientへ自動的にReplicateする
 - Jump TriggerはNetwork上で確実に一回のPulseとして同期させるため、`Animator.SetTrigger()`ではなく`NetworkAnimator.SetTrigger(string)`を経由
 - Idle3→Idle8の3秒Timerは`PlayerAnimationController`内のLocal(per-Client)な`float`のみで管理。NetworkVariable/RPCは追加していない — 各Clientの見た目が数フレームずれても実害のないVisual-onlyな効果のため
+
+## NetworkAnimatorの配置(Step 12.1.2)
+
+**Root Cause**: Step 12.1でCharacter Selectionを導入した際、`NetworkAnimator`は元々`GreenBoy.prefab`の`Model`(Character 1選択時は非Activeになる`GreenBoyVisual`の子)に置かれたままでした。NGOの`NetworkObject.InvokeBehaviourNetworkSpawn()`は、Spawnする各`NetworkBehaviour`について`gameObject.activeInHierarchy`を確認し、非Activeな場合は`OnNetworkSpawn()`の呼び出しを**Warningログのみで黙ってSkip**します(`ChildNetworkBehaviours`を辿る際、Error扱いにはならないため気づきにくい)。
+
+さらに`PlayerCharacterVisual.OnNetworkSpawn()`は、`GameplayPlayerSpawner`が実際のCharacter IDを設定する**前**に、同じSpawnパス中で`NetworkVariable<int> _characterId`のDefault値(`FallbackCharacterId = 1` = Capsule)を使って`ApplyVisual(1)`を即座に実行します。これにより、Character 2〜20(GreenBoy)を選んでいても、Spawnの瞬間には一時的に`GreenBoyVisual`が非Activeとなり、その配下にあった`NetworkAnimator`の`OnNetworkSpawn()`が永久にSkipされていました。
+
+結果、`NetworkAnimator`内部のPrivateフィールド`m_NetworkAnimatorStateChangeHandler`(`OnNetworkSpawn()`内でのみ初期化される)が`null`のままとなり、Jump時の`NetworkAnimator.SetTrigger()`が`NullReferenceException`を投げ(Single PlayerのBug A)、かつRemote Client向けのContinuous Animator Parameter同期も一切開始しない(Online RemoteのBug B)という2つの不具合が同時に発生していました。`NetworkAnimator.IsSpawned`は外側の`NetworkObject`のSpawn状態を反映するだけで、この個別`NetworkBehaviour`自身の`OnNetworkSpawn()`が実際に走ったかどうかは示さないため、表面的なチェックでは正常に見えてしまう点も発見を難しくしていました。
+
+**Fix**: `NetworkAnimator`を**Player Root**(`Player.prefab`直下、Character Selectionに関わらず常にActive)へ移動し、`Animator`参照だけは引き続き`GreenBoyVisual/Model`のAnimatorを指すようにしました。これにより、`NetworkAnimator`自身の`OnNetworkSpawn()`は常に実行されることが保証されます。Animator Controller・Trigger送信方法(`NetworkAnimator.SetTrigger()`)・Jump Physics・Character Selection/Online Assignmentロジックは無変更です。
+
+**設計ルール(今後Characterを追加する場合も同様)**: NetworkBehaviour(特に`NetworkAnimator`)は、Character Visual切り替えでActive/Inactiveが変化するGameObject配下に置いてはならない。常にActiveなPlayer Root(またはそれに準ずる常時Activeな階層)に置き、対象のAnimator/Componentへは通常のSerialized Field経由でCross-GameObject参照する。
 
 ## 既知の制約・意図的に対応しなかった事項(Step 12 Section 30)
 
@@ -161,6 +174,8 @@ if (!IsOwner || animator == null || !animator.gameObject.activeInHierarchy) retu
 ```
 
 Character固有の分岐は一切なく、「参照しているAnimatorが現在Activeかどうか」だけを見ています。GreenBoy Animator Controller自体はStep 12から無変更です。
+
+Step 12.1.2で`NetworkAnimator`をPlayer Rootへ移動したことに伴い、`PlayerAnimationController.Awake()`内の参照解決も`animator.GetComponent<NetworkAnimator>()`(Animator側の兄弟を探す)から`GetComponent<NetworkAnimator>()`(自分自身と同じPlayer Root上を探す)に変更しました。`animator`(GreenBoyのAnimator)というSerialized Field自体は変更していません。
 
 ## Placement / Camera / Physicsへの影響
 
