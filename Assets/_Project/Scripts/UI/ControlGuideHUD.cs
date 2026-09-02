@@ -14,8 +14,12 @@ namespace Domino.UI
     // (Section 15).
     public class ControlGuideHUD : MonoBehaviour
     {
-        [Header("Root")]
-        [SerializeField] private GameObject rootPanel;
+        // Step 11.1: this script's own GameObject (rootPanel's former target) must stay Always
+        // Active - a MonoBehaviour that SetActive(false)'s the GameObject it lives on stops its
+        // own Update() forever, with nothing left running to ever SetActive(true) it again. The
+        // toggle target is now a child Content object instead (Section 2).
+        [Header("Content (toggled - NOT this script's own GameObject)")]
+        [SerializeField] private GameObject content;
 
         [Header("External State (read-only references, same GameObjects GameplayHUD owns)")]
         [SerializeField] private GameObject confirmationPanel;
@@ -35,14 +39,23 @@ namespace Domino.UI
         [SerializeField] private GameObject placeRow;
         [SerializeField] private GameObject cancelRow;
 
-        [Header("Pressed-state Keycaps (Hold inputs only - Section 12/13)")]
+        [Header("Pressed-state Keycaps - Normal Guide")]
         [SerializeField] private Image keycapW;
         [SerializeField] private Image keycapA;
         [SerializeField] private Image keycapS;
         [SerializeField] private Image keycapD;
         [SerializeField] private Image keycapShift;
+        [SerializeField] private Image keycapSpace;
+        [SerializeField] private Image keycapE;
+        [SerializeField] private Image keycapRmb;
+        [SerializeField] private Image keycapF;
+        [SerializeField] private Image keycapPauseEsc;
+
+        [Header("Pressed-state Keycaps - Placement Guide")]
         [SerializeField] private Image keycapRotateA;
         [SerializeField] private Image keycapRotateD;
+        [SerializeField] private Image keycapLmb;
+        [SerializeField] private Image keycapCancelEsc;
 
         [Header("Pressed-state Colors")]
         [SerializeField] private Color keycapNormalColor = new Color(0.18f, 0.18f, 0.18f, 0.95f);
@@ -60,7 +73,7 @@ namespace Domino.UI
                 || phase == GamePhase.RUNNING || phase == GamePhase.FAILED;
             bool hideGuide = isPaused || confirmationOpen || !isGameplayPhase;
 
-            SetActive(rootPanel, !hideGuide);
+            SetActive(content, !hideGuide);
             if (hideGuide) return;
 
             bool showPlacementGuide = placing;
@@ -86,27 +99,43 @@ namespace Domino.UI
             SetActive(placeRow, showPlacementGuide);
             SetActive(cancelRow, showPlacementGuide);
 
-            UpdatePressedStates(showNormalGuide, showPlacementGuide);
+            UpdatePressedStates(showNormalGuide, showPlacementGuide, canPlaceDomino, canStartChallenge, canPause);
         }
 
-        private void UpdatePressedStates(bool normalGuide, bool placementGuide)
+        // Step 11.1 (Section 9-13): every Key/Mouse Button actually shown gets a Pressed State,
+        // not just Hold-style ones - a One-shot Key (E/F/Esc) simply reads as briefly Pressed for
+        // whatever real Frames its physical key is down, with no Flash/delay machinery added.
+        private void UpdatePressedStates(bool normalGuide, bool placementGuide, bool canPlaceDomino, bool canStartChallenge, bool canPause)
         {
             Keyboard keyboard = Keyboard.current;
-            if (keyboard == null) return;
+            Mouse mouse = Mouse.current;
 
-            if (normalGuide)
+            if (normalGuide && keyboard != null)
             {
                 SetPressed(keycapW, keyboard.wKey.isPressed);
                 SetPressed(keycapA, keyboard.aKey.isPressed);
                 SetPressed(keycapS, keyboard.sKey.isPressed);
                 SetPressed(keycapD, keyboard.dKey.isPressed);
                 SetPressed(keycapShift, keyboard.leftShiftKey.isPressed);
+                SetPressed(keycapSpace, keyboard.spaceKey.isPressed);
+                if (canPlaceDomino) SetPressed(keycapE, keyboard.eKey.isPressed);
+                if (canStartChallenge) SetPressed(keycapF, keyboard.fKey.isPressed);
+                if (canPause) SetPressed(keycapPauseEsc, keyboard.escapeKey.isPressed);
+            }
+            if (normalGuide && canPlaceDomino && mouse != null)
+            {
+                SetPressed(keycapRmb, mouse.rightButton.isPressed);
             }
 
-            if (placementGuide)
+            if (placementGuide && keyboard != null)
             {
                 SetPressed(keycapRotateA, keyboard.aKey.isPressed);
                 SetPressed(keycapRotateD, keyboard.dKey.isPressed);
+                SetPressed(keycapCancelEsc, keyboard.escapeKey.isPressed);
+            }
+            if (placementGuide && mouse != null)
+            {
+                SetPressed(keycapLmb, mouse.leftButton.isPressed);
             }
         }
 
