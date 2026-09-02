@@ -1603,3 +1603,43 @@ Character Select Cardの見た目を「Number/Nameのみ」から「Portrait画�
 ### Git
 - Step 13.1完了時点(`66393a8`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 13.3: Selection Card Visual Polish / Stage Portraits
+
+Character Select Cardの左Image/右Textレイアウトへの刷新、Stage SelectへのThumbnail追加、およびOnline ClientでPortraitが表示されないBugの調査を行いました。開発者が就寝中のため、Online実機での最終確認は翌日に持ち越しとし、本Stepでは可能な範囲の調査・実装・Single Player実機確認までを完了しています。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)「Selection Card Visual Polish(Step 13.3)」、[Docs/StageAuthoring.md](StageAuthoring.md)「0.5. Stage Select Cardの見た目を変更する手順」を参照してください。
+
+### Part A: Online Client Portrait Bug(調査のみ、Code変更なし)
+Code ReviewとGit Diff確認により、`CharacterSelectController.Populate()`にHost/Client分岐が存在しないこと、Portrait解決が完全にLocalな処理(Network送信なし)であることを確認しました。最も可能性が高いRoot Cause仮説は「Client側のMPPM Virtual PlayerがStep 13.2のScene編集より前からPlay Modeに入ったままで、一度もPlay Mode再起動を経ていないため、編集後のCharacterCardTemplateをまだ参照していない」というもので、これはUnityのDomain Reload(Script再Compile時に発生)がPlay Mode中のScene Object階層をdiskから再読み込みしない、という一般的な仕様と整合します。**開発者の明示的な指示に従い、確証のないままのCode変更(Sprite RPC等)は行っていません。** 翌日、Player 2側でPlay Modeを完全に再起動してから再確認いただくようお願いしています。
+
+### Part B/C: 実装済み
+- `StageDefinition.cs`: UI表示専用の`Sprite thumbnail`(Optional)フィールドを追加。`GameplaySceneName`とは完全に独立
+- `StageSelectController.cs`: `placeholderThumbnail`フィールドを追加、`Populate()`で各StageCardのThumbnail Imageへ`stage.Thumbnail ?? placeholderThumbnail`を設定
+- Character Card: Layoutを「上Portrait+下Text」から「左Portrait(100×100)+右Text」へ変更、Card全体を150×68→280×128へ拡大(詳細は下記「発見した既存Bug」参照)
+- Stage Card: 新しい`Thumbnail`子(Image, Preserve Aspect ON, Raycast Target OFF)を追加、上部80%を占有。既存Textは下部20%へ再配置(Font Size 34→22、Raycast Target OFF)
+- Stage Placeholder Sprite新規作成: `Assets/_Project/Art/UI/StagePortraits/StagePortrait_Placeholder.png`(C#で手続き的に生成したSimpleな山+太陽のLandscape Icon、外部Asset不使用)、8 Stage全員が同一Asset参照を共有
+
+### 発見した既存Bug(Step 13以前から存在、今回発見・修正)
+`CharacterGrid`/`StageGrid`両方の`RectTransform.localScale`が`(1.858664, ...)`という異常値になっていることを発見しました。`git log`調査の結果、Step 12.1.2b(`48d685e`)時点で既に存在していたBugと判明(Step 13.2/13.3由来ではない)。この異常Scaleにより、`GetWorldCorners()`等での位置実測が約1.86倍に歪んでおり、**Step 13.2で「余白が非常に少ない」と判断していたのは、この歪んだ実測値に基づく誤判定だったことが判明しました。** `localScale`を`(1,1,1)`へ修正した結果、実際の余白は当初想定よりずっと大きく、Character Cardを150×68→280×128へ大幅に拡大できました。詳細な調査過程は[Docs/CharacterSystem.md](CharacterSystem.md)を参照してください。
+
+### 動作確認済み(Single Player、実機Play Mode)
+- **Test A(Character Layout)**: 20 Cards・5×4 Gridが画面内に綺麗に収まり、左Portrait/右Textが重ならないこと、Header・Back/Stage Select Buttonsと重ならないことを実測・Screenshotで確認
+- **Online UI Overlapチェック**: `GameSessionContext.IsOnline = true`でOnline専用UI(SelectionCountText等)を一時的に表示させ、新しい大きいCard Layoutでも重ならないことを確認(Section 29の通り、実際のOnline接続は不要と判断)
+- **Selection/Highlight**: Character 2/3、Stage 5のClickでSelection/Highlightが正常動作することを確認
+- **Test D(Stage Layout)**: 8 Cards・4×2 Gridで、Thumbnail(上80%)とText(下20%)が重ならないこと、Header・Back/Start Game Buttonsと重ならないことを確認(元々余白に余裕があり、Cardサイズ自体は変更していません)
+- **Replaceability**: Character 3へTest Sprite(緑色)、Stage 2へTest Sprite(オレンジ色)を仮設定し、**それぞれ対象のCardだけ**画像が変わることを確認。その後両方Portrait/Thumbnailをnullへ戻し、Temporary Test Sprite Assetを削除して復元済み
+- **Stage Scene Mapping確認**: Stage_02.assetの`gameplaySceneName`が`StageScene_2`のまま変更されていないことをAsset Data上で確認
+- Console: 上記テスト全体でError/Warning 0件
+
+### 未実装/確認できなかった事項(開発者不在のため翌日確認予定)
+- **Online 2 Player Focused Test(Section 29-31)**: Host+ClientでのCharacter Select/Stage Select確認、特にPart AのBug修正確認(Player 2側Play Mode再起動後にPortraitが表示されるか)は未実施です。開発者が起床後、ご自身で確認予定です
+- Stage Selected Highlight(Online専用機能)の実機確認 - Code Pattern自体はCharacter SelectのHighlight(実機確認済み)と完全に同一のため、Riskは低いと判断していますが、実際のOnline接続での視覚確認は未実施です
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 13.2完了時点(`3fca159`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

@@ -15,3 +15,4 @@ MonoBehaviour:
   stageId: 2
   displayName: STAGE 2
   gameplaySceneName: StageScene_2
+  thumbnail: {fileID: 0}

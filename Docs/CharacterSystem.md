@@ -223,23 +223,25 @@ Pause → Character Select → Confirm で戻った場合も、`GameSessionConte
 
 ---
 
-# Character Select Portrait UI(Step 13.2)
+# Character Select Portrait UI(Step 13.2、Layout刷新はStep 13.3)
 
 Character Select Cardの見た目だけを、「Number/Nameのみ」から「Portrait画像 + Number/Name」へ変更しました。**Character Selection Logic(ID解決・Highlight・Online同期・All-player Gate等)には一切変更がなく、Networkで送受信されるのは引き続き`CharacterId`のみです。**
 
 ## Card Hierarchy(`CharacterCardTemplate`、`MainMenu.unity`)
 
+Step 13.3で「左Image / 右Text」Layoutへ刷新しました(下記「Step 13.3」章参照)。現在の構造:
+
 ```
-CharacterCardTemplate (Image[背景/Highlight色] + Button)
-├─ Portrait (Image, 新規追加)
-│   Anchor: 上部中央 / Size 46×34 / Preserve Aspect ON / Raycast Target OFF
+CharacterCardTemplate (280×128, Image[背景/Highlight色] + Button)
+├─ Portrait (Image, Step 13.2で追加)
+│   Anchor: 左端中央 / Size 100×100 / Preserve Aspect ON / Raycast Target OFF
 └─ Text (TextMeshProUGUI, 既存)
-    Anchor: 下部Stretch / Size (stretch)×30 / Font Size 16→12 / Raycast Target OFF
+    Anchor: 右側Stretch(Portraitの右、Card全高) / Font Size 14 / Raycast Target OFF
 ```
 
 `Portrait`は表示専用のImageで、Card全体のClickは引き続きRoot(`CharacterCardTemplate`)の`Button`が担うため(Raycast TargetをOffにしているPortrait/TextはClickを妨げません)、既存のButton Click Handler(`CharacterSelectController.OnCharacterCardClicked`)は無変更です。
 
-Grid(`CharacterGrid`、`GridLayoutGroup`)は`cellSize = (150, 68)`、`spacing = (12, 8)`のまま5列×4行=20 Cardsを維持しています。**Header("CHARACTER SELECT")・Online専用のSelectionCountText/SelectionStatusText・BackButton/StageSelectButtonとの間で使える垂直方向の余白は元々非常に少なく**(Header/Bottom UIとGridの間、Fix前の時点で既に上下数px〜十数pxしか余裕がありませんでした)、Cardを大きくしすぎるとこれらと重なってしまうため、Card高さは元の70から68への微増に留めています(Portrait/Textとも小さめのSize・Font Sizeで両立)。
+Grid(`CharacterGrid`、`GridLayoutGroup`)は`cellSize = (280, 128)`、`spacing = (16, 16)`で5列×4行=20 Cardsを維持しています。詳細な余白計算・Step 13.2時点で「余白が非常に少ない」としていた分析が実は`CharacterGrid`の`localScale`異常値(1.858664倍)による誤測定だったことの経緯は、下記「Step 13.3」章を参照してください。
 
 ## `CharacterDefinition.Portrait`(UI表示専用Data)
 
@@ -270,3 +272,41 @@ portraitImage.sprite = character.Portrait != null ? character.Portrait : placeho
 3. Play Modeで確認 - **そのCharacterのCardだけ**画像が切り替わり、他のCardはPlaceholderのまま
 
 `CharacterSelectController`・Prefab・Network関連のCode変更は一切不要です。Sprite未設定のCharacterは自動的にPlaceholderのままなので、20体すべてに同時にPortraitを用意する必要もありません。
+
+---
+
+# Selection Card Visual Polish(Step 13.3)
+
+## 発見した既存Bug: `CharacterGrid`/`StageGrid`の`localScale`異常値
+
+Character Cardを大きくする作業中、`CharacterGrid`(および同じ構造の`StageGrid`)の`RectTransform.localScale`が`(1.858664, 1.858664, 1.858664)`という、Scale=1であるべきUI Layout Containerとしては明らかに異常な値になっていることを発見しました。`git log`での調査の結果、この値はStep 13.2どころかStep 12.1.2b(`48d685e`)時点で既に存在していた、**Step 13以前からの既存Bug**であることを確認しています(Step 13.2/13.3で新たに作り込んだものではありません)。
+
+この`localScale`は、`GetWorldCorners()`等でCard/Grid位置を実測する際に、実際のSize/Positionを約1.86倍に見せかけて計算を狂わせます。Step 13.2で「Header/Bottom UIとGridの間の余白が非常に少ない」と判断していたのは、**この異常なScaleによって実際より大きく描画されていたGridが、周囲のUI要素と誤って近接して見えていたため**でした。Step 13.3で`localScale`を`(1, 1, 1)`へ修正した結果、実際の余白は当初の想定よりずっと大きいことが判明し、Character Card自体を大幅に拡大することができました。
+
+**教訓**: UI RectTransformの`localScale`が`(1,1,1)`以外になっている場合、GridLayoutGroup等のContainerとしては基本的に誤りです。将来同様の症状(要素同士が「近すぎる」「小さく見える」)に遭遇した場合は、まず`localScale`を疑ってください。
+
+## Character Card Layout(左Image / 右Text)
+
+```
+CharacterCardTemplate (280×128)
+├─ Portrait: 左端中央Anchor、100×100、Padding 14px
+└─ Text: 右側Stretch(左Offset 130px = Portrait分を避ける、右Offset -14px)、Font Size 14
+```
+
+`CharacterGrid`: `cellSize = (280, 128)`、`spacing = (16, 16)`、`anchoredPosition = (0, 33)`。5列×4行=20 Cardsのまま、Header・Online専用UI(SelectionCountText等)・Back/Stage Select Buttonのいずれとも重ならないことを実測・Screenshotの両方で確認済みです(Online専用UIとの余白の方がSingle Player側より狭く、実質的なBinding Constraintでした)。
+
+## Client向けPortraitが表示されないBugについて(Section 0-A)
+
+開発者からOnline Host+Clientでの実機Screenshotにより、「Host側はPortrait付きUIが表示されるが、Client側(MPPM Virtual Player)は旧UI(Number/Nameのみ)のまま」という報告がありました。調査の結果、以下を確認しています。
+
+- `CharacterSelectController.Populate()`にHost/Client(`IsServer`/`IsClient`等)で分岐するコードは一切なく、CardのInstantiate/Portrait解決ロジックはNetwork Roleに関わらず完全に同一です(Code Review確認済み)
+- Portrait解決は`CharacterId → Local CharacterCatalog → CharacterDefinition.Portrait`という完全にLocalな処理で、Sprite自体をNetwork送信する経路はコード上どこにも存在しません
+- `git diff`で確認した限り、MainMenu.unity/CharacterDefinition.cs/CharacterSelectController.csのいずれも、Host/Clientで挙動が分かれるような変更は含まれていません
+
+一方、MPPM(Multiplayer Play Mode)のVirtual Playerは、`Library/VP/<個別ID>/`配下にMain Editorとは別の状態ディレクトリを持つ、Main Editorとは別プロセスのEditorインスタンスです。CharacterCardTemplateへPortrait子要素を追加した編集はMain Editor(Host)側でScene保存する形で行っており、その保存後にClient側のPlay Modeセッションが一度もScene再読み込みを経ていない場合、Client側は編集前の(Portraitを持たない)CharacterCardTemplateをまだ参照し続けている可能性があります。
+
+**Root Causeとして最も可能性が高いと判断している仮説**: Client側のMPPM Virtual PlayerウィンドウがStep 13.2のScene編集より前からPlay Modeに入ったままで、一度もPlay Modeの完全な再起動(Stop→Play)を経ていない。Unityの一般的な仕様として、Script再Compileに伴うDomain Reloadは「既にPlay Mode中のScene Object階層」を保持したまま行われ、Sceneをdiskから再読み込みするものではないため、Client側であってもPlay Mode自体を再起動しない限り、新しいCharacterCardTemplateの内容(Portrait子要素)を拾わない可能性があります。
+
+**この時点でCode変更は行っていません** - 上記の通りCode Review・Diff確認では実際にHost/Clientの分岐を一切見つけられておらず、開発者の明示的な指示(Section 4: Sprite RPC等のNetwork同期を追加しない)とも一致する形で、推測だけでのCode変更を避けています。
+
+**次回オンライン確認時の確認手順**: Player 2(Client)のWindowでPlay Modeを完全に一度Stop → 再度Play → Room再Joinしてみて、Portraitが表示されるようになるか確認してください。表示されるようになれば上記仮説が確定し、以後Scene編集後は開発者ご自身でもClient側のPlay Mode再起動を習慣にすることで再発を防げます。もし再起動後も表示されない場合は、実際のCode Bugの可能性があるため、その際はLive Client Accessと共に追加調査が必要です。

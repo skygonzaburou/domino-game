@@ -16,6 +16,9 @@ namespace Domino.Menu
         [SerializeField] private RectTransform gridContainer;
         [SerializeField] private Button cardTemplate;
 
+        [Tooltip("Step 13.3: StageDefinition.Thumbnailが未設定(None)のStage Cardに使うFallback画像")]
+        [SerializeField] private Sprite placeholderThumbnail;
+
         [Header("Online (Step 9C)")]
         [SerializeField] private TextMeshProUGUI selectionStatusText;
         [SerializeField] private Button startGameButton;
@@ -66,6 +69,15 @@ namespace Domino.Menu
 
                 TextMeshProUGUI label = card.GetComponentInChildren<TextMeshProUGUI>(true);
                 if (label != null) label.text = stage.DisplayName;
+
+                // Step 13.3: falls back to the shared Placeholder when a Stage has no Thumbnail
+                // set - mirrors CharacterSelectController.Populate()'s Portrait fallback exactly.
+                Transform thumbnailTransform = card.transform.Find("Thumbnail");
+                Image thumbnailImage = thumbnailTransform != null ? thumbnailTransform.GetComponent<Image>() : null;
+                if (thumbnailImage != null)
+                {
+                    thumbnailImage.sprite = stage.Thumbnail != null ? stage.Thumbnail : placeholderThumbnail;
+                }
 
                 StageDefinition capturedStage = stage;
                 card.onClick.AddListener(() => OnStageCardClicked(capturedStage));

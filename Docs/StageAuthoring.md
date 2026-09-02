@@ -36,6 +36,18 @@ Step 13で、Stage Selectの各Stageが「どのUnity Sceneを読み込むか」
 
 ---
 
+## 0.5. Stage Select Cardの見た目(Thumbnail画像)を変更する手順(Step 13.3)
+
+Stage Select画面の各Card上部に表示されるThumbnail画像は、`StageDefinition.Thumbnail`(UI表示専用、`GameplaySceneName`とは完全に独立したField)から解決されます。**Code変更は一切不要**です。
+
+1. `Assets/_Project/Data/Stages/Stage_XX.asset`をProject WindowからClick
+2. Inspectorの`Thumbnail`スロットへ、用意した画像(`Texture Type = Sprite`でImport済みのもの、横長推奨)をDrag & Drop
+3. Play Modeで確認 - **そのStageのCardだけ**画像が切り替わり、他のCardは共有Placeholder(`Assets/_Project/Art/UI/StagePortraits/StagePortrait_Placeholder.png`)のまま
+
+`Thumbnail`が未設定(None)のStageは自動的にPlaceholderへFallbackするため、一部のStageだけ画像を用意して残りは後回しにしても、UIが壊れることはありません。`StageScene_2`のようなGameplay Scene自体の内容を変更しても、Thumbnailが自動生成されることはありません(Thumbnailは完全に別の、手動で用意する2D Sprite Assetです)。
+
+---
+
 ## 1. 使用するPrefab
 
 Stageを組み立てるための部品(Prefab)は3つ、いずれも `Assets/_Project/Prefabs/GameFlow/` にあります。
