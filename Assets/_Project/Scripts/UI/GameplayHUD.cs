@@ -37,17 +37,21 @@ namespace Domino.UI
         [SerializeField] private Button resumeButton;
         [SerializeField] private Button restartButton;
         [SerializeField] private Key pauseKey = Key.Escape;
+        [SerializeField] private Key restartKey = Key.R; // Step 10.1
 
         [Header("Pause Navigation (Step 10B)")]
         [SerializeField] private Button pauseStageSelectButton;
         [SerializeField] private TextMeshProUGUI pauseStageSelectButtonText;
         [SerializeField] private Button pauseTitleButton;
+        [SerializeField] private Key stageSelectKey = Key.S; // Step 10.1
+        [SerializeField] private Key titleKey = Key.T; // Step 10.1
 
         [Header("Confirmation Dialog (Step 10A)")]
         [SerializeField] private GameObject confirmationPanel;
         [SerializeField] private TextMeshProUGUI confirmationMessageText;
         [SerializeField] private Button confirmYesButton;
         [SerializeField] private Button confirmNoButton;
+        [SerializeField] private Key confirmYesKey = Key.Enter; // Step 10.1 (No reuses pauseKey/Escape)
 
         [Header("Result Navigation (Step 10B)")]
         [SerializeField] private Button resultStageSelectButton;
@@ -99,12 +103,7 @@ namespace Domino.UI
                 buildTimeText.text = "BUILD TIME\n" + (timer != null && timer.HasStarted ? FormatTime(timer.GetBuildSeconds()) : "--:--.--");
             }
 
-            if (phase == GamePhase.SUCCESS && !isPaused && Keyboard.current != null && Keyboard.current[retryKey].wasPressedThisFrame)
-            {
-                RequestRetry();
-            }
-
-            HandlePauseKey(phase, isPaused, confirmationOpen);
+            HandleGameplayMenuInput(phase, isPaused, confirmationOpen);
             UpdateStageSelectGating();
         }
 
@@ -116,7 +115,9 @@ namespace Domino.UI
         private void UpdateStageSelectGating()
         {
             bool canStageSelect = !GameSessionContext.IsOnline || (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
-            string label = canStageSelect ? "Stage Select" : "Stage Select (Host Only)";
+            // Step 10.1: the (S) Shortcut hint only makes sense while the action is actually
+            // usable - a Host-only-disabled Button has no working Shortcut to advertise.
+            string label = canStageSelect ? "Stage Select (S)" : "Stage Select (Host Only)";
 
             if (pauseStageSelectButton != null) pauseStageSelectButton.interactable = canStageSelect;
             if (pauseStageSelectButtonText != null) pauseStageSelectButtonText.text = label;
@@ -124,28 +125,45 @@ namespace Domino.UI
             if (resultStageSelectButtonText != null) resultStageSelectButtonText.text = label;
         }
 
-        // Escape means exactly one of three things per press, in this priority order (Section
-        // 47): close an open Confirmation; Resume if already Paused; otherwise open Pause -
-        // unless the Local Player is currently mid-Placement, in which case Escape belongs to
-        // PlacementController's own Cancel (Section 12, frozen Placement behaviour) and this
-        // method must not also act on that same press.
-        private void HandlePauseKey(GamePhase? phase, bool isPaused, bool confirmationOpen)
+        // Step 10.1: single Context-sensitive dispatcher for every Gameplay Menu Keyboard
+        // Shortcut (Pause Menu / Confirmation Dialog / SUCCESS Result). Each branch is mutually
+        // exclusive and returns immediately after handling a key, so exactly one context is ever
+        // "listening" for a given press - R/S/T do nothing during ordinary Gameplay (Section 4),
+        // and an open Confirmation takes priority over everything else (Section 7: R/S/T must
+        // never fire the Pause Menu/Result action underneath it). Every branch calls the exact
+        // same method its on-screen Button already calls (Section 5) - no separate Keyboard-only
+        // Navigation Logic exists.
+        private void HandleGameplayMenuInput(GamePhase? phase, bool isPaused, bool confirmationOpen)
         {
             if (Keyboard.current == null) return;
-            if (!Keyboard.current[pauseKey].wasPressedThisFrame) return;
 
             if (confirmationOpen)
             {
-                CloseConfirmation();
+                if (Keyboard.current[confirmYesKey].wasPressedThisFrame) OnConfirmYes();
+                else if (Keyboard.current[pauseKey].wasPressedThisFrame) OnConfirmNo();
                 return;
             }
 
             if (isPaused)
             {
-                RequestResume();
+                if (Keyboard.current[pauseKey].wasPressedThisFrame) RequestResume();
+                else if (Keyboard.current[restartKey].wasPressedThisFrame) OnRestartButtonClicked();
+                else if (Keyboard.current[stageSelectKey].wasPressedThisFrame) OnPauseStageSelectButtonClicked();
+                else if (Keyboard.current[titleKey].wasPressedThisFrame) OnPauseTitleButtonClicked();
                 return;
             }
 
+            if (phase == GamePhase.SUCCESS)
+            {
+                if (Keyboard.current[retryKey].wasPressedThisFrame) RequestRetry();
+                else if (Keyboard.current[stageSelectKey].wasPressedThisFrame) OnResultStageSelectButtonClicked();
+                else if (Keyboard.current[titleKey].wasPressedThisFrame) OnResultTitleButtonClicked();
+                return;
+            }
+
+            // Ordinary Gameplay: only Escape has any meaning here (open Pause) - Section 47's
+            // Placement-Cancel priority is unchanged from Step 10A.
+            if (!Keyboard.current[pauseKey].wasPressedThisFrame) return;
             if (IsLocalPlayerPlacing()) return;
 
             if (phase == GamePhase.BUILDING || phase == GamePhase.READY || phase == GamePhase.RUNNING)
