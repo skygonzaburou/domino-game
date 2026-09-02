@@ -57,7 +57,13 @@ namespace Domino.Player
 
         private void Update()
         {
-            if (!IsOwner || animator == null) return;
+            // Step 12.1: Character 1 (Capsule) has no Animator to drive at all - GreenBoyVisual
+            // (and its Animator) is simply Inactive in that case (PlayerCharacterVisual). This
+            // check is character-agnostic (it only ever asks "is the Animator I already have a
+            // reference to currently active"), so it needs no knowledge of which Character is
+            // selected and keeps working unmodified for any future Character this Animator
+            // reference might point at.
+            if (!IsOwner || animator == null || !animator.gameObject.activeInHierarchy) return;
 
             bool moving = _motor.MoveAxis.sqrMagnitude > 0.0001f;
             // Section 11: Ctrl(Slow Walk)takes priority over Shift(Run)when both held - mirrors

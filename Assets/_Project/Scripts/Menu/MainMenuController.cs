@@ -19,6 +19,7 @@ namespace Domino.Menu
         [SerializeField] private GameObject onlineCreatePanel;
         [SerializeField] private GameObject onlineJoinPanel;
         [SerializeField] private GameObject onlineRoomPanel;
+        [SerializeField] private GameObject characterSelectPanel;
         [SerializeField] private GameObject stageSelectPanel;
 
         private Dictionary<MenuState, GameObject> _panels;
@@ -48,6 +49,7 @@ namespace Domino.Menu
                 { MenuState.OnlineCreate, onlineCreatePanel },
                 { MenuState.OnlineJoin, onlineJoinPanel },
                 { MenuState.OnlineRoom, onlineRoomPanel },
+                { MenuState.CharacterSelect, characterSelectPanel },
                 { MenuState.StageSelect, stageSelectPanel },
             };
         }
@@ -94,6 +96,14 @@ namespace Domino.Menu
         public void OnBackClicked()
         {
             if (CurrentState == MenuState.Title) return;
+
+            // Step 12.1 (Section 37): Online Character Select intentionally has no Back - a
+            // Client popping Local History back toward Room/OnlineSelect would desync from the
+            // actual Session Phase (still CharacterSelect for everyone else), and the Host doing
+            // the same would abandon the very Session it is supposed to be driving forward.
+            // Leaving is only ever via the existing Leave Session flow (Online Room Panel).
+            if (CurrentState == MenuState.CharacterSelect && GameSessionContext.IsOnline) return;
+
             MenuState previous = _history.Count > 0 ? _history.Pop() : MenuState.Title;
             ShowState(previous, pushHistory: false);
         }
@@ -103,10 +113,12 @@ namespace Domino.Menu
             ShowState(MenuState.ModeSelect);
         }
 
+        // Step 12.1 (Section 2): Time Attack now leads to Character Select first - Stage Select
+        // is reached one step later, from CharacterSelectController's own "STAGE SELECT" Button.
         public void OnTimeAttackClicked()
         {
             GameSessionContext.IsOnline = false;
-            ShowState(MenuState.StageSelect);
+            ShowState(MenuState.CharacterSelect);
         }
 
         public void OnOnlinePlayClicked()

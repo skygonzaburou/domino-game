@@ -2,6 +2,8 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Domino.Menu;
+using Domino.Player;
 
 namespace Domino.Networking
 {
@@ -115,7 +117,19 @@ namespace Domino.Networking
                     Debug.LogWarning("[GameplayPlayerSpawner] No Spawn Points found under '" + spawnPointsContainerName + "' - spawning at World Origin.");
                 }
 
-                NetworkObject.InstantiateAndSpawn(prefab, NetworkManager.Singleton, ownerClientId: clientId, isPlayerObject: true, position: position, rotation: rotation);
+                NetworkObject spawned = NetworkObject.InstantiateAndSpawn(prefab, NetworkManager.Singleton, ownerClientId: clientId, isPlayerObject: true, position: position, rotation: rotation);
+
+                // Step 12.1 (Section 23): Server-authoritative Character assignment, applied
+                // right after Spawn. Single Player has exactly one Client (this Host itself), so
+                // its own local GameSessionContext.SelectedCharacterId is authoritative directly;
+                // Online resolves per-Client via NetworkSessionState's Server-side selection map
+                // (Section 18) since multiple Clients cannot share one static field.
+                int characterId = GameSessionContext.IsOnline
+                    ? (NetworkSessionState.Instance != null ? NetworkSessionState.Instance.GetSelectedCharacterId(clientId) : 1)
+                    : GameSessionContext.SelectedCharacterId;
+
+                PlayerCharacterVisual characterVisual = spawned.GetComponent<PlayerCharacterVisual>();
+                characterVisual?.ServerSetCharacterId(characterId);
             }
         }
 

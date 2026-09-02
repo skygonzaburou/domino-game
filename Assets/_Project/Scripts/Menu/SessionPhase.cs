@@ -5,6 +5,7 @@ namespace Domino.Menu
     public enum SessionPhase
     {
         Room,
+        CharacterSelect,
         StageSelect,
         StartingGame,
         InGame

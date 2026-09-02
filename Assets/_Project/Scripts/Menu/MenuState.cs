@@ -8,6 +8,7 @@ namespace Domino.Menu
         OnlineCreate,
         OnlineJoin,
         OnlineRoom,
+        CharacterSelect,
         StageSelect
     }
 }

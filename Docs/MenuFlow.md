@@ -19,17 +19,20 @@ TIME ATTACK            ONLINE PLAY
   │                       ↓
   │             2 Players以上集合          (Step 9B)
   │                       ↓
+  │               CHARACTER SELECT        (Step 12.1、各Playerが自分のCharacterを選択)
+  │                       ↓
   │                  STAGE SELECT
-  │                       │
-  ↓                       ↓
-STAGE SELECT          HostがStage選択     (Step 9C)
+CHARACTER SELECT          │
+  │                       ↓
+  ↓                  HostがStage選択     (Step 9C)
+STAGE SELECT              │
   │                       │
   └──────────┬────────────┘
              ↓
          GAMEPLAY
 ```
 
-Step 9A〜9Cを通じて、上図の全経路(Single Player: TITLE→MODE SELECT→TIME ATTACK→STAGE SELECT→GAMEPLAY / Online: TITLE→MODE SELECT→ONLINE PLAY→CREATE or JOIN→ROOM→(2人以上)→STAGE SELECT(Host-only)→GAMEPLAY)が実装済みです。Online側の詳細(Session API・Room・Host Authority・Late Join禁止等)は`Docs/OnlineSession.md`を参照してください。
+Step 9A〜9Cを通じて、Single Player(TITLE→MODE SELECT→TIME ATTACK→STAGE SELECT→GAMEPLAY)とOnline(TITLE→MODE SELECT→ONLINE PLAY→CREATE or JOIN→ROOM→(2人以上)→STAGE SELECT(Host-only)→GAMEPLAY)の全経路が実装済みでした。Step 12.1で両経路の間に**CHARACTER SELECT**を挿入し、Stage選択の前にPlayerが使用するCharacterを選べるようにしています(第11章)。Online側の詳細(Session API・Room・Host Authority・Late Join禁止等)は`Docs/OnlineSession.md`を、Character Catalog/Player側の詳細は`Docs/CharacterSystem.md`を参照してください。
 
 ## 2. Scene構成
 
@@ -52,6 +55,7 @@ Canvas (MainMenuController)
 ├─ OnlineCreatePanel      (Step 9Bで機能実装、9Aはプレースホルダ)
 ├─ OnlineJoinPanel        (Step 9Bで機能実装、9Aはプレースホルダ)
 ├─ OnlineRoomPanel        (Step 9B/9Cで機能実装、9Aはプレースホルダ)
+├─ CharacterSelectPanel   (Step 12.1で追加)
 └─ StageSelectPanel
 ```
 
@@ -66,7 +70,7 @@ Canvas (MainMenuController)
 
 `TitlePanel`は起動時に表示される最初のPanelです。`START`ボタン(`MainMenuController.OnStartClicked`)で`ModeSelectPanel`へ遷移します。
 
-`ModeSelectPanel`は`TIME ATTACK`(`OnTimeAttackClicked`)と`ONLINE PLAY`(`OnOnlinePlayClicked`)の2ボタンを持ちます。`OnTimeAttackClicked`は`GameSessionContext.IsOnline = false`を設定した上で`StageSelectPanel`へ遷移します。
+`ModeSelectPanel`は`TIME ATTACK`(`OnTimeAttackClicked`)と`ONLINE PLAY`(`OnOnlinePlayClicked`)の2ボタンを持ちます。`OnTimeAttackClicked`は`GameSessionContext.IsOnline = false`を設定した上で`CharacterSelectPanel`へ遷移します(Step 12.1以降。Stage Selectへは、Character Select Panel自身の`STAGE SELECT`ボタンから1段階後に到達します)。
 
 ## 5. Single Player Architecture(Local Host)
 
@@ -217,3 +221,43 @@ sequenceDiagram
 ### 未確認事項
 
 実際の2台のClientによるOnline Stage Select Return / Title Returnの直接End-to-End確認は、既存のStep 9系ドキュメントと同じ制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、Host自身の1接続によるシミュレーションのみで検証しています。詳細な実機確認結果は`Docs/ImplementationStatus.md`のStep 10Bエントリを参照してください。
+
+---
+
+## 11. Character Select(Step 12.1)
+
+Stage Selectの前に、PlayerがGameplayで使用するCharacterを選ぶ`CharacterSelectPanel`を追加しました。Character Catalog・Player側のVisual切り替えの詳細は`Docs/CharacterSystem.md`を、Online側のPer-player同期は`Docs/OnlineSession.md`「11. Character Select」を参照してください。本章はMenu Flow/Panel構成に絞って記載します。
+
+### 新しい経路
+
+```text
+Single:  TIME ATTACK → CHARACTER SELECT → STAGE SELECT → GAMEPLAY
+Online:  ROOM(2人以上) → CHARACTER SELECT → STAGE SELECT(Host-only) → GAMEPLAY
+```
+
+`CharacterSelectPanel`は既存の`StageSelectPanel`と同じ「1 Scene + Panel切り替え」Architectureの上に構築しており、新しいSceneは追加していません。`MenuState`に`CharacterSelect`を追加しただけです。
+
+### `CharacterSelectController`(StageSelectControllerと同じ責務分離)
+
+`StageSelectController`と全く同じ形の責務分離です。`MainMenuController`はPanelの表示/非表示のみを行い、`CharacterSelectController`(`CharacterSelectPanel`にアタッチ)がCatalogからCard Gridを動的生成し、Single Player/Onlineの分岐を持ちます。
+
+- **Card Click**: `GameSessionContext.SelectedCharacterId`を即座に更新するだけ(Stage Selectへは進まない、既存のStage Card Clickとは異なる挙動)
+- **`STAGE SELECT`ボタン**: Single Playerは即座に`MenuState.StageSelect`へ、Onlineは`OnlineSessionController.OnStageSelectButtonClicked()`(Host-only)を呼ぶ
+
+### Character Grid(5 × 4 = 20 Cards)
+
+`StageGrid`(4列)と同じ`GridLayoutGroup`ベースの構成を、`FixedColumnCount = 5`で複製しています。Card Template(`CharacterCardTemplate`)は**Grid Containerの外(Panel直下)に配置**しています - Grid内に置くとInactiveなTemplate自身もGridLayoutGroupのLayout対象になり、20枚のCardが実質21枚分の位置計算をされて最終行がButton行と重なる不具合が実装時に発覚したため(既存の`StageSelectPanel`も同じ構造上の性質を持ちますが、8 Stage/4列という少ない枚数のため症状が顕在化しにくく、本Stepでは手を加えていません)。
+
+### Back Navigation(Section 37)
+
+Single PlayerのCharacter Selectは通常のBack履歴(`MainMenuController.OnBackClicked()`)でMode Selectへ戻れます。**Online中のCharacter Selectは意図的にBackを無効化**しています。
+
+```csharp
+if (CurrentState == MenuState.CharacterSelect && GameSessionContext.IsOnline) return;
+```
+
+Client側だけがLocalにRoom画面へ戻ってしまうとSession Phase(全員で共有しているCharacterSelect Phase)と食い違うため、Leaveは既存のOnline Room Panelの`Leave`のみを経由させています。
+
+### 未確認事項
+
+実際の2台のClientによるOnline Character Select(それぞれ別Characterを選択→Host Stage Select→両画面でVisual一致確認)の直接End-to-End確認は、Step 9系と同じ制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)に加え、本Step実装中に長時間のPlay Modeサイクルを繰り返した結果、NetworkManager Shutdownが完了しない(`ShutdownInProgress`のまま固まる、UDP Port再Bind失敗)という環境側の不安定化にも遭遇したため、今回は未実施です。`GameSessionContext.ReturnDestination`によるCharacter Select遷移ロジック自体は、Shutdown chainを経由しない直接呼び出しで単体確認済みです。開発者ご自身での実機確認を推奨します。

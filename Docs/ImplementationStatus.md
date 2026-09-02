@@ -1297,3 +1297,44 @@ Player Root(Rigidbody/CapsuleCollider/PlayerMotor/PlayerStats/NetworkObject/Netw
 - 実際の2人以上でのOnline Cross-Client Animation可視性確認(上記参照、最優先)
 - 実Keyboard入力によるSlow Walk時の`Animator.speed`調整の体感確認
 - Roughness Textureを活用した、より精密なPBR Material調整(現状はMetallic=0の簡易設定)
+
+---
+
+## Step 12.1: Character Select / Character Assignment
+
+Stage Selectの前にCharacter Select画面を追加し、Player Gameplay Architecture(Rigidbody/CapsuleCollider/PlayerMotor/PlacementController/PlayerPushController/PlayerAnimationController/GreenBoy Animator/NetworkAnimator/`applyRootMotion = false`)を作り直さずに、PlayerがCapsule(Character 1)とGreenBoy(Character 2〜20)のどちらを使うか選べるようにしました。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)「Character Select / Character Catalog」、[Docs/MenuFlow.md](MenuFlow.md)「11. Character Select」、[Docs/OnlineSession.md](OnlineSession.md)「11. Character Select」、[Docs/PauseSystem.md](PauseSystem.md)「11. Pause → Character Select」を参照してください。
+
+### 実装済み
+- **Data-driven Character Catalog新規作成**: `CharacterDefinition`/`CharacterCatalog`(ScriptableObject、既存の`StageDefinition`/`StageCatalog`と同一の設計)、`CharacterId`/`DisplayName`/`VisualKey`の3Fieldのみ保持。`Character_01.asset`(Classic/Capsule) 〜 `Character_20.asset`(すべてGreen Boy/GreenBoyVisual)の20 AssetとCatalog本体を作成
+- **`PlayerCharacterVisual.cs`新規作成**(Player Root上、NetworkBehaviour): Server-authoritativeな`NetworkVariable<int> CharacterId`を持ち、Catalogから解決した`VisualKey`と同名のVisual Root(`Visual`または`GreenBoyVisual`の2つのみ)だけを`SetActive(true)`にする。IDごとのHard-coded switch/ifは存在しない - Character 2〜20はすべて同じ`"GreenBoyVisual"`という文字列を指すため、GreenBoy Visualは1つしか存在せず19体分Prefabを複製していない。Catalogに存在しないIDはCharacter 1へ安全にFallback
+- **`PlayerAnimationController.cs`への最小限の追加**: Character 1(Capsule)ではGreenBoy Animatorを表示する必要がないため、`Update()`冒頭に`!animator.gameObject.activeInHierarchy`のGuardを1行追加。Character固有の分岐はなく、Animator Controller自体は無変更
+- **`GameplayPlayerSpawner.cs`への追加**: Player Spawn直後、Single Playerは`GameSessionContext.SelectedCharacterId`、Onlineは`NetworkSessionState.GetSelectedCharacterId(clientId)`を読み、`PlayerCharacterVisual.ServerSetCharacterId()`へ渡す。Character割り当てはServer/Host側のみが行う
+- **`CharacterSelectController.cs`新規作成**(`Domino.Menu`名前空間): `StageSelectController`と同じ責務分離。5×4=20枚のCard Gridを`GridLayoutGroup`(`FixedColumnCount = 5`)で動的生成し、Card ClickではStage Selectへ進まずSelectionのみ更新、専用の`STAGE SELECT`ボタンで次へ進む
+- **`MenuState`/`SessionPhase`にCharacterSelectを追加**、`GameSessionContext`に`SelectedCharacterId`(default = 1)・`PendingHostReturnToCharacterSelect`を追加(既存の`SelectedStageId`/`PendingHostReturnToStageSelect`と対になる構成)
+- **`NetworkSessionState.cs`の拡張**: Server-only `Dictionary<ulong, int>`でClientId→CharacterIdを保持(NetworkVariableではなく、Section 15/18の要件に対する最小の設計)。`RequestSelectCharacterRpc`(Client→Server、Host-onlyではなく任意のClientが呼べる、Catalog存在チェックのみ実施)、`GetSelectedCharacterId`(未選択時はCharacter 1へFallback)、`HostAdvanceToCharacterSelect`(Room→CharacterSelect)を追加。既存`HostAdvanceToStageSelect`は遷移元PhaseをRoomからCharacterSelectへ変更するだけで本体は無変更。Client切断時に`NetworkManager.OnClientDisconnectCallback`でDictionaryエントリを掃除
+- **`OnlineSessionController.cs`の拡張**: Room Panelの既存ボタンを`OnCharacterSelectButtonClicked()`(Room→CharacterSelect)へ配線し直し、`OnStageSelectButtonClicked()`(CharacterSelect→StageSelect、Method本体は無変更)をCharacter Select Panel側の新ボタンに引き継がせた。`HandlePhaseChanged`にCharacterSelect分岐、`RefreshRoomUI`の低Player数Gateを両Phaseに拡張
+- **`MainMenuController.cs`の拡張**: `characterSelectPanel`をPanel辞書に追加、`OnTimeAttackClicked()`の遷移先をCharacterSelectへ変更、`OnBackClicked()`にOnline+CharacterSelect時のBack無効化Guardを追加(Section 37、Client/HostがLocalにRoomへ戻ってSession Phaseと食い違うことを防止)
+- **`GameplayNavigationController.cs`に`RequestReturnToCharacterSelect()`を追加**: 既存`RequestReturnToStageSelect()`と全く同じ形(Single: Shutdown経由、Online: Session維持したままDespawn+Scene Load)で、対象を`MenuState.CharacterSelect`/`PendingHostReturnToCharacterSelect`に変えただけ
+- **`GameplayHUD.cs`にPause Menu「Character Select (C)」ボタンを追加**: Restart と Stage Select の間に挿入。Single/Online(Host-only Gating、"(Host Only)"ラベル切替)双方の確認ダイアログ文言をSection 28どおりに実装、`PendingConfirmAction.CharacterSelect`を追加
+- **MainMenu.unity**: `StageSelectPanel`を複製して`CharacterSelectPanel`を作成(既存UIとの視覚的一貫性を保つため)。5×4 Grid用にセルサイズ/間隔/Panel内配置を調整。**実装中に発見したバグ**: 複製直後、Inactiveな`CharacterCardTemplate`がGrid Container内に残ったままだったため、`GridLayoutGroup`が21枚分(Template+20 Card)の位置計算を行い、最終行がSTAGE SELECT/BACKボタンと重なる不具合が発生 - Templateを Grid Container外(Panel直下)へ移動して解決。この構造的な性質は既存の`StageSelectPanel`にも存在するが、8 Stage/4列という少ない枚数のため症状が顕在化しにくく、本Stepでは対象外(既存Systemへの影響が及ぶ範囲を超えるため触れていない)
+- **SampleScene.unity**: Pause Panelの既存`Stage Select`ボタンを複製して`Character Select`ボタンを作成し、Restartとの間へ挿入(既存Restart/Stage Select/Titleボタンのローカル位置を75px間隔で1段ずつ下へシフト)
+
+### 動作確認済み(Single Player, Play Mode)
+- MainMenu → START → TIME ATTACK → Character Select Panel(5×4=20枚、01=Classicが黄色でDefault Highlight)が正しく表示されることをスクリーンショットで確認
+- **Test A(Capsule)**: Character 1のままSTAGE SELECT → Stage 1 → Gameplayで、`Visual`(Capsule)がActive、`GreenBoyVisual`がInactiveであることを確認(構造・スクリーンショット両方)
+- **Test B(GreenBoy)**: Character 2を選択 → STAGE SELECT → Stage 1 → Gameplayで、`GreenBoyVisual`がActive、`Visual`がInactiveであることを確認。GreenBoy Animator(Idle3 Default State、`applyRootMotion = false`)がStep 12のまま動作することも確認
+- **Test C(Duplicate GreenBoy IDs)**: Character 20を選択してもCatalog解決が`VisualKey = "GreenBoyVisual"`(Character 2と同一文字列)を返すこと、`PlayerCharacterVisual`が固定2要素の`visualRoots`配列のみを参照すること(IDごとのGameObjectが存在しないこと)をコード・Catalogレベルで確認。Gameplay Spawnまでの実機確認はPort競合(下記参照)により一部中断
+- **Pause → Character Select(Section 43)**: Character 2でGameplay中にPause → Character Select (C) → 確認ダイアログ(文言確認)→Yes、`GameSessionContext.ReturnDestination`が正しく消費されCharacterSelectPanelへ遷移することを確認(Shutdown Chainを介さない直接呼び出しでの単体確認)
+- UI Layout: 5×4 Gridが16:9画面内に収まり、Header/Grid/Status Text/Back・Stage Selectボタンが重ならないことをスクリーンショットで確認(実装中に発見・修正したGrid Layout配置バグの再検証を含む)
+- Console: 上記確認済み範囲でError 0件
+
+### 未実装/確認できなかった事項
+- **実際のNetworkManager Shutdown Chainを含むPause→Character Select→MainMenuの完全End-to-End確認**: 本Step実装中、長時間のPlay Modeサイクル(Single Player開始・停止を多数回繰り返す自動テスト)により、Editor自体が`Play Mode Paused`状態へ予期せず入る、`NetworkManager.Shutdown()`が`ShutdownInProgress`のまま完了しない、後続の`StartHost()`がUDP Port 7799の再Bind失敗で失敗する、という環境側の不安定化に複数回遭遇しました。これは新規実装したコードの不具合ではなく(該当ロジックは既存の`RequestReturnToStageSelect()`と全く同じコードパスを再利用)、本セッション内で極めて多数のPlay Mode起動/停止を繰り返したことによる環境側のリソース枯渇/劣化と判断しています。`GameSessionContext.ReturnDestination`によるMainMenu側の遷移ロジック自体は、Shutdown Chainを経由しない直接テストで確認済みです
+- **実際の2 Client間でのOnline Character Select確認(Section 44-46)**: 上記の環境不安定化に加え、Step 12から持ち越しの制約(同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難)により、今回は未実施です。Server側Validation(RPC受信・Catalog照合・Phase Gate)はコードレビューで確認済みです
+- Test Cの実際のGameplay Spawnまでの実機確認(GreenBoy Visualが確かに1つしか存在しないことの実行時確認)は、上記のPort競合により完了できませんでした。Catalog/PlayerCharacterVisualのコード設計上、IDごとに異なるGameObjectを参照する仕組みが存在しないため、Test Bで確認済みの経路(Character 2)と全く同じコードパスをCharacter 20が通ることは確実です
+- **開発者ご自身での実機確認を推奨します**(特にOnline 2 Player TestとPause→Character SelectのShutdown Chain部分)
+
+### 将来確認が必要な事項
+- 実際の2人以上でのOnline Character Select確認(上記参照、最優先)
+- Pause → Character SelectのNetworkManager Shutdown Chainを含む完全End-to-End確認(環境を再起動した上での再検証を推奨)
+- 次のStepでCharacter 3以降を別Humanoid Characterへ差し替える際の、Character Select/Session側の境界(CharacterId/CharacterDefinitionのみを知り、GreenBoy固有のAnimation名等は一切参照していないことを確認済み)の実際の拡張性検証

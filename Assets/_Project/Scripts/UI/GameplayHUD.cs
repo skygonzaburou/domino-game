@@ -46,6 +46,11 @@ namespace Domino.UI
         [SerializeField] private Key stageSelectKey = Key.S; // Step 10.1
         [SerializeField] private Key titleKey = Key.T; // Step 10.1
 
+        [Header("Pause Navigation - Character Select (Step 12.1)")]
+        [SerializeField] private Button pauseCharacterSelectButton;
+        [SerializeField] private TextMeshProUGUI pauseCharacterSelectButtonText;
+        [SerializeField] private Key characterSelectKey = Key.C;
+
         [Header("Confirmation Dialog (Step 10A)")]
         [SerializeField] private GameObject confirmationPanel;
         [SerializeField] private TextMeshProUGUI confirmationMessageText;
@@ -58,7 +63,7 @@ namespace Domino.UI
         [SerializeField] private TextMeshProUGUI resultStageSelectButtonText;
         [SerializeField] private Button resultTitleButton;
 
-        private enum PendingConfirmAction { None, Restart, StageSelect, Title }
+        private enum PendingConfirmAction { None, Restart, CharacterSelect, StageSelect, Title }
         private PendingConfirmAction _pendingAction = PendingConfirmAction.None;
 
         private void Awake()
@@ -66,6 +71,7 @@ namespace Domino.UI
             if (retryButton != null) retryButton.onClick.AddListener(RequestRetry);
             if (resumeButton != null) resumeButton.onClick.AddListener(RequestResume);
             if (restartButton != null) restartButton.onClick.AddListener(OnRestartButtonClicked);
+            if (pauseCharacterSelectButton != null) pauseCharacterSelectButton.onClick.AddListener(OnPauseCharacterSelectButtonClicked);
             if (pauseStageSelectButton != null) pauseStageSelectButton.onClick.AddListener(OnPauseStageSelectButtonClicked);
             if (pauseTitleButton != null) pauseTitleButton.onClick.AddListener(OnPauseTitleButtonClicked);
             if (confirmYesButton != null) confirmYesButton.onClick.AddListener(OnConfirmYes);
@@ -105,6 +111,7 @@ namespace Domino.UI
 
             HandleGameplayMenuInput(phase, isPaused, confirmationOpen);
             UpdateStageSelectGating();
+            UpdateCharacterSelectGating();
         }
 
         // Section 28/40: Online Stage Select (from either the Pause Menu or the SUCCESS Result)
@@ -123,6 +130,18 @@ namespace Domino.UI
             if (pauseStageSelectButtonText != null) pauseStageSelectButtonText.text = label;
             if (resultStageSelectButton != null) resultStageSelectButton.interactable = canStageSelect;
             if (resultStageSelectButtonText != null) resultStageSelectButtonText.text = label;
+        }
+
+        // Step 12.1 (Section 31/32): Pause Menu's "Character Select" is Host-only Online, exactly
+        // like Stage Select above (Section 38 explicitly keeps Result unchanged - no equivalent
+        // Button there).
+        private void UpdateCharacterSelectGating()
+        {
+            bool canCharacterSelect = !GameSessionContext.IsOnline || (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
+            string label = canCharacterSelect ? "Character Select (C)" : "Character Select (Host Only)";
+
+            if (pauseCharacterSelectButton != null) pauseCharacterSelectButton.interactable = canCharacterSelect;
+            if (pauseCharacterSelectButtonText != null) pauseCharacterSelectButtonText.text = label;
         }
 
         // Step 10.1: single Context-sensitive dispatcher for every Gameplay Menu Keyboard
@@ -148,6 +167,7 @@ namespace Domino.UI
             {
                 if (Keyboard.current[pauseKey].wasPressedThisFrame) RequestResume();
                 else if (Keyboard.current[restartKey].wasPressedThisFrame) OnRestartButtonClicked();
+                else if (Keyboard.current[characterSelectKey].wasPressedThisFrame) OnPauseCharacterSelectButtonClicked();
                 else if (Keyboard.current[stageSelectKey].wasPressedThisFrame) OnPauseStageSelectButtonClicked();
                 else if (Keyboard.current[titleKey].wasPressedThisFrame) OnPauseTitleButtonClicked();
                 return;
@@ -201,6 +221,17 @@ namespace Domino.UI
         private void OnPauseStageSelectButtonClicked()
         {
             ShowConfirmation("Return to Stage Select?\nCurrent progress will be lost.", PendingConfirmAction.StageSelect);
+        }
+
+        // Step 12.1 (Section 28): always confirms first too, but (like Title) the wording
+        // differs - Online explicitly says "everyone" since this is a Host-only action that
+        // pulls every connected Player back to Character Select together.
+        private void OnPauseCharacterSelectButtonClicked()
+        {
+            string message = GameSessionContext.IsOnline
+                ? "Return everyone to Character Select?\nCurrent progress will be lost."
+                : "Return to Character Select?\nCurrent progress will be lost.";
+            ShowConfirmation(message, PendingConfirmAction.CharacterSelect);
         }
 
         // Section 17: Pause Menu's Title always confirms first too, but the wording differs -
@@ -261,6 +292,9 @@ namespace Domino.UI
             {
                 case PendingConfirmAction.Restart:
                     GameFlowManager.Instance?.RequestRestartRpc();
+                    break;
+                case PendingConfirmAction.CharacterSelect:
+                    GameplayNavigationController.Instance?.RequestReturnToCharacterSelect();
                     break;
                 case PendingConfirmAction.StageSelect:
                     GameplayNavigationController.Instance?.RequestReturnToStageSelect();

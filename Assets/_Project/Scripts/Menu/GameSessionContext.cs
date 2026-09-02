@@ -10,6 +10,15 @@ namespace Domino.Menu
         public static int SelectedStageId { get; set; } = -1;
         public static bool IsOnline { get; set; }
 
+        // Step 12.1: the local Client's own current Character choice. Unlike SelectedStageId,
+        // this always has a valid value (Section 9: Character 1 = Classic Capsule is the Default
+        // Selection) - there is no "nothing selected yet" state to represent, so no -1 sentinel
+        // is needed. Read directly by CharacterSelectController to restore the highlight (Single
+        // Player return via Pause - Section 30) and by GameplayPlayerSpawner for the Single
+        // Player spawn path (Online instead resolves per-Client via NetworkSessionState, since
+        // multiple Clients cannot share one static field).
+        public static int SelectedCharacterId { get; set; } = 1;
+
         // Step 10B (Section 29): consumed once by MainMenuController.Start() to skip Title and
         // land directly on the correct Panel when returning from Gameplay (Pause Menu / SUCCESS
         // Result "Stage Select"). Left null for an ordinary Title return - MainMenuController
@@ -30,5 +39,10 @@ namespace Domino.Menu
         // (OnNetworkSpawn) to move straight to StageSelect Phase instead of its usual Room
         // default.
         public static bool PendingHostReturnToStageSelect { get; set; }
+
+        // Step 12.1 (Section 31/34): identical purpose to PendingHostReturnToStageSelect above,
+        // for the new Pause -> Character Select Host action - consumed once by the freshly
+        // spawned NetworkSessionState (OnNetworkSpawn) to move straight to CharacterSelect Phase.
+        public static bool PendingHostReturnToCharacterSelect { get; set; }
     }
 }

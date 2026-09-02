@@ -92,6 +92,37 @@ namespace Domino.Menu
             }
         }
 
+        // Step 12.1 (Section 30/31): identical shape to RequestReturnToStageSelect above, just
+        // targeting Character Select instead - Online is Host-only (re-checked here, same as
+        // Stage Select), Single Player fully shuts the session down and lets MainMenu's Start()
+        // land on the stored ReturnDestination once it reloads.
+        public void RequestReturnToCharacterSelect()
+        {
+            GameplayPauseManager.ForceLocalUnpauseImmediate();
+
+            if (GameSessionContext.IsOnline)
+            {
+                if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+
+                GameplayPlayerSpawner.Instance?.DespawnAllGameplayPlayers();
+                GameSessionContext.ReturnDestination = MenuState.CharacterSelect;
+                GameSessionContext.PendingHostReturnToCharacterSelect = true;
+                NetworkManager.Singleton.SceneManager.LoadScene(mainMenuSceneName, LoadSceneMode.Single);
+            }
+            else
+            {
+                GameSessionContext.ReturnDestination = MenuState.CharacterSelect;
+                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                {
+                    NetworkManager.Singleton.Shutdown();
+                }
+                else
+                {
+                    SceneManager.LoadScene(mainMenuSceneName, LoadSceneMode.Single);
+                }
+            }
+        }
+
         // Section 32/33/34: identical call for Single Player, Online Client, and Online Host -
         // NetworkManager.Shutdown() already behaves correctly differently for each (a Client
         // shutting down only disconnects itself; the Host shutting down ends the whole session,

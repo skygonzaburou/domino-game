@@ -270,3 +270,43 @@ Pause Menu・SUCCESS Resultどちらの`Stage Select`ボタンも、`NetworkMana
 
 - 実際の2台のClientによるOnline Global Pauseの直接確認(既存のStep 9系ドキュメントと同じ制約 - 同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難なため、Single Player/Host単独接続でのみ検証)。アーキテクチャ自体はGameFlowManager/NetworkSessionStateと同じScene-placed NetworkObjectパターンのため、既存のOnline機能と同様に動作すると判断していますが、開発者ご自身での実機確認を推奨します
 - Escapeキーの実際のキー押下シミュレーションによるEnd-to-End確認は、本環境ではキー入力イベントの実フレーム反映タイミングを外部ツールから制御できず断念しました(Button ClickはExecuteEvents経由で確認済み)。`HandlePauseKey()`自体のロジックはコードレビューと、R-key(既存のRetry Shortcut、同じ`Keyboard.current`ポーリングパターン)がこれまで問題なく機能してきた実績から、動作することを確信しています
+
+---
+
+## 11. Pause → Character Select(Step 12.1)
+
+Pause Menuに`Character Select`ボタンを追加し、`Resume(Esc) / Restart(R) / Character Select(C) / Stage Select(S) / Return to Title(T)`の5ボタン構成になりました。挿入位置はRestartとStage Selectの間です。既存の`Stage Select`/`Return to Title`(第9章)と完全に同じ設計パターンを踏襲しています。
+
+### Confirmation文言(Section 28)
+
+| | Single Player | Online(Host-only) |
+|---|---|---|
+| Character Select | `Return to Character Select?`<br>`Current progress will be lost.` | `Return everyone to Character Select?`<br>`Current progress will be lost.` |
+
+`Return to Title`(第9章)と同じく、Online側だけ「全員に影響する」ことが伝わる文言に差し替えています。Stage Select確認文言(第9章、Single/Online共通)とは異なるパターンです。
+
+### `GameplayNavigationController.RequestReturnToCharacterSelect()`
+
+`RequestReturnToStageSelect()`と全く同じ形です(`GameSessionContext.ReturnDestination`/`PendingHostReturnToCharacterSelect`という対になるFlagを使うだけ)。
+
+```text
+Single:  Shutdown() → MainMenu再Load → Start()がReturnDestination(=CharacterSelect)を消費
+Online:  DespawnAllGameplayPlayers() → NetworkManager.SceneManager.LoadScene(MainMenu)
+         → 新しいNetworkSessionState.OnNetworkSpawn()がPendingHostReturnToCharacterSelectを消費 → Phase = CharacterSelect
+```
+
+Online側はSession/Relay接続を切断しません(Section 31、Stage Select Returnと同じ)。Gameplay Player Objectは`GameplayPlayerSpawner.DespawnAllGameplayPlayers()`で明示的に破棄してからScene遷移するため、Step 9.2で修正したPlayer落下バグの再発はありません(`MenuFlow.md`「10. Gameplay Player Cleanup」参照)。
+
+### Host-only Gating(Section 31/32)
+
+Stage Selectと全く同じパターンで、Onlineの間だけ`NetworkManager.Singleton.IsHost`に応じて`interactable`とラベル(`"Character Select (C)"` / `"Character Select (Host Only)"`)を切り替えます。ClientがCキーを押してもSession全体は遷移しません(Server-side再チェックはGameplayNavigationController自身が`NetworkManager.IsServer`を見て行います)。
+
+### 実機確認済み(Single Player, Play Mode)
+
+- Pause中に`Character Select (C)`ボタン/Cキーで確認ダイアログが表示され、文言が上表のSingle Player版と一致することを確認
+- 「Yes」確定後、`GameSessionContext.ReturnDestination = MenuState.CharacterSelect`が正しくセットされ、MainMenu再Load後の`MainMenuController.Start()`がCharacterSelectPanelを直接表示することを確認(Shutdown Chainを経由しない直接呼び出しでの単体確認)
+- Character 2(GreenBoy)でGameplayに入った状態からPause → Character Select → Character 1(Classic)を選び直し→Stage Select→Gameplayで、実際にGreenBoy→Capsuleへ切り替わることを確認
+
+### 未確認事項
+
+本Step実装中、長時間のPlay Modeサイクル(Single Player開始・停止を多数回繰り返す自動テスト)により、`NetworkManager.Shutdown()`が`ShutdownInProgress`のまま完了せず、後続の`StartHost()`がUDP Port再Bind失敗で失敗するという環境側の不安定化に複数回遭遇しました(Editor自体が`Play Mode Paused`状態に予期せず入る事象も併発)。そのため、「実際にPause → Character Select (C) → Confirm → Shutdown → OnClientStopped → MainMenu」という完全なEnd-to-Endの連続クリックを、Shutdown Chainを含めて最後まで安定して再現することはできませんでした。`ReturnDestination`によるMainMenu側の遷移ロジック自体は上記の通り単体確認済みですが、Shutdown Chain部分は`RequestReturnToStageSelect()`(Step 10Bで実機確認済み)と全く同じコードパスを再利用しているため、動作すると判断しています。Online版(Host-only Gating含む)の実機確認も同様の制約で未実施です。開発者ご自身での実機確認を推奨します。

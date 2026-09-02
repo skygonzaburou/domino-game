@@ -242,6 +242,18 @@ namespace Domino.Menu
             MainMenuController.Instance.ShowState(MenuState.OnlineSelect);
         }
 
+        // Step 12.1 (Section 19): the Room Panel's "next" Button now leads to Character Select
+        // first, not Stage Select directly.
+        public void OnCharacterSelectButtonClicked()
+        {
+            if (_session == null || !_session.IsHost) return;
+            NetworkSessionState.Instance?.HostAdvanceToCharacterSelect(_session.PlayerCount);
+        }
+
+        // Step 12.1 (Section 22/36): now called from the Character Select Panel's own "STAGE
+        // SELECT" Button instead of the Room Panel - body/target Phase unchanged, only the
+        // caller moved (NetworkSessionState.HostAdvanceToStageSelect itself now requires
+        // CharacterSelect as the source Phase, enforced there).
         public void OnStageSelectButtonClicked()
         {
             if (_session == null || !_session.IsHost) return;
@@ -315,7 +327,11 @@ namespace Domino.Menu
 
         private void HandlePhaseChanged(SessionPhase phase)
         {
-            if (phase == SessionPhase.StageSelect)
+            if (phase == SessionPhase.CharacterSelect)
+            {
+                MainMenuController.Instance.ShowState(MenuState.CharacterSelect);
+            }
+            else if (phase == SessionPhase.StageSelect)
             {
                 MainMenuController.Instance.ShowState(MenuState.StageSelect);
             }
@@ -414,11 +430,13 @@ namespace Domino.Menu
                     : "Waiting for the host...";
             }
 
-            // Section 38: dropping below the minimum while already in Stage Select must not
-            // leave Start Game reachable - returning to Room is the simplest way to enforce
-            // that without a separate "paused" state.
+            // Section 38: dropping below the minimum while already in Character Select or Stage
+            // Select must not leave those Phases reachable/continuable - returning to Room is
+            // the simplest way to enforce that without a separate "paused" state (Step 12.1
+            // extends this same guard to the new Character Select Phase).
             if (_session.IsHost && !canStart && NetworkSessionState.Instance != null
-                && NetworkSessionState.Instance.Phase == SessionPhase.StageSelect)
+                && (NetworkSessionState.Instance.Phase == SessionPhase.StageSelect
+                    || NetworkSessionState.Instance.Phase == SessionPhase.CharacterSelect))
             {
                 NetworkSessionState.Instance.HostReturnToRoom();
             }
