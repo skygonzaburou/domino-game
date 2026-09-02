@@ -24,6 +24,12 @@ namespace Domino.Player
         [Tooltip("Playerが持つ全Visual Root(例: Visual[Capsule], GreenBoyVisual)。CharacterDefinition.VisualKeyと同名のものだけがActiveになる")]
         [SerializeField] private GameObject[] visualRoots;
 
+        [Tooltip("GreenBoyVisual配下の共有SkinnedMeshRenderer(Model/char1)。色違いCharacter(Step 12.1.2b)のMaterial切り替え先")]
+        [SerializeField] private SkinnedMeshRenderer greenBoyRenderer;
+
+        [Tooltip("CharacterDefinition.VisualMaterialが未設定の場合に使うDefault Material(GreenBoy_Material)")]
+        [SerializeField] private Material greenBoyDefaultMaterial;
+
         private const int FallbackCharacterId = 1;
 
         private readonly NetworkVariable<int> _characterId = new NetworkVariable<int>(
@@ -61,10 +67,25 @@ namespace Domino.Player
             CharacterDefinition definition = catalog != null ? catalog.FindById(characterId) : null;
             string visualKey = definition != null ? definition.VisualKey : ResolveFallbackVisualKey();
 
-            if (visualRoots == null) return;
-            foreach (GameObject root in visualRoots)
+            if (visualRoots != null)
             {
-                if (root != null) root.SetActive(root.name == visualKey);
+                foreach (GameObject root in visualRoots)
+                {
+                    if (root != null) root.SetActive(root.name == visualKey);
+                }
+            }
+
+            // Step 12.1.2b: GreenBoyVisual is a single shared Model/Animator (Section 6 - never
+            // duplicated per Character), so a color variant is expressed as a Material swap on
+            // this one Renderer rather than a new Visual Root. Always resolved here (not only
+            // when a custom Material is set) so switching back to a Definition without one
+            // reliably restores the Default rather than leaving a previous selection's color.
+            if (greenBoyRenderer != null)
+            {
+                Material material = definition != null && definition.VisualMaterial != null
+                    ? definition.VisualMaterial
+                    : greenBoyDefaultMaterial;
+                if (material != null) greenBoyRenderer.sharedMaterial = material;
             }
         }
 

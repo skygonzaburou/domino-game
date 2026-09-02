@@ -90,6 +90,31 @@ Dance → Idle3                   [!IsVictory]
 
 **設計ルール(今後Characterを追加する場合も同様)**: NetworkBehaviour(特に`NetworkAnimator`)は、Character Visual切り替えでActive/Inactiveが変化するGameObject配下に置いてはならない。常にActiveなPlayer Root(またはそれに準ずる常時Activeな階層)に置き、対象のAnimator/Componentへは通常のSerialized Field経由でCross-GameObject参照する。
 
+## 色違いCharacter(Material Override、Step 12.1.2b)
+
+Character 3〜6(Blue/Purple/Red/Yellow Boy)は、**新しいVisual Root(GameObject)を追加せず**、GreenBoyの共有Model([責務分離](#責務分離)の`GreenBoyVisual`単体)のMaterialだけをCharacter選択に応じて差し替える方式で実装しています。GreenBoyの`Model`(Animator/Armature/SkinnedMeshRenderer)は**常に1つだけ**のまま — 前述の「NetworkAnimatorの配置」ルール(Player Rootに1つだけ・複製しない)と矛盾しないための設計です。
+
+### 仕組み
+
+- `CharacterDefinition.cs`に`visualMaterial`(`Material`型、Optional)フィールドを追加。未設定(None)ならDefault Materialが使われる
+- `PlayerCharacterVisual.cs`に`greenBoyRenderer`(`GreenBoyVisual/Model/char1`の`SkinnedMeshRenderer`参照)と`greenBoyDefaultMaterial`(`GreenBoy_Material`)を追加。`ApplyVisual(int characterId)`は、VisualRootのActive切り替えに加えて、`greenBoyRenderer.sharedMaterial`を「そのCharacterの`VisualMaterial`、なければ`greenBoyDefaultMaterial`」に**毎回明示的に**設定する
+- 「毎回明示的に」設定するのがポイントです。もし「`VisualMaterial`が設定されている時だけ上書きする」という条件にすると、一度Blue(Character 3)を選んだ後にGreen(Character 2/7〜20、`VisualMaterial`未設定)へ切り替えたとき、前回選択したBlueの色が残ってしまうバグになります。`ApplyVisual`は`_characterId`のNetworkVariable変更のたびに毎回全体を再解決するため、Onlineで他のCharacterから切り替わってきたRemote Clientでも正しく反映されます
+- 既存の`_characterId`(NetworkVariable、Server-authoritative)による同期の仕組みにそのまま乗るため、**追加のNetworkVariable/RPCは不要**です
+
+### 手動でCharacterを追加する手順(色違い版、Character 7〜20や将来の追加分に使えます)
+
+新しいMeshy AI等のTexture/Materialを用意し、既存のGreenBoy Meshをそのまま使い回して色だけ変えるパターンの手順です。
+
+1. **Materialを作る**: `Assets/_Project/Art/Characters/GreenBoy/Materials/`に新しい`.mat`を作成(既存の`GreenBoy_Material`を右クリック→`Duplicate`が確実 — Shader/Smoothness等の設定を丸ごと引き継げます)。新しいTextureを使う場合は`Assets/_Project/Art/Characters/GreenBoy/Textures/`に配置し、複製したMaterialの`Base Map`(Albedo)スロットへ差し替える
+2. **CharacterDefinitionを編集**: `Assets/_Project/Data/Characters/Character_XX.asset`をProject WindowからClick(**新規作成は不要** — Character 7〜20は既に存在します)。Inspectorで`Display Name`を分かりやすい名前に、`Visual Material`スロットへ手順1で作ったMaterialをDrag & Drop。`Visual Key`は`GreenBoyVisual`のまま変更しない
+3. **Play Modeで確認**: Character Selectで対象IDのCardを選び、色が正しく反映されること・Idle/Walk/Run/Jump Animationが問題なく動くこと(共有Animatorなので通常は無関係に動作するはず)を確認する
+
+これだけで、`PlayerAnimationController`/`PlayerCharacterVisual`/`Player.prefab`側のC#・Prefab変更は一切不要です。
+
+### 手動でCharacterを追加する手順(全く新しいMesh/Rigの場合、参考)
+
+色違いではなく全く別のHumanoid Mesh(新しいFBX)を追加したい場合は、上記より一段階複雑になります。現状の`Player.prefab`は`NetworkAnimator`を1つだけ持ち、その`Animator`参照は`GreenBoyVisual/Model`の1つのAnimatorに固定されているため(Section 6「Exactly ONE NetworkAnimator per Player」)、そのままでは新しいMeshに別のAnimatorを追加しても同期されません。対応するには、`NetworkAnimator.Animator`参照を選択中のCharacterに応じて動的に切り替えるか、あるいは全CharacterでAvatar/Animator Controllerを共有できるようRigを揃えて`Animator`自体は1つのまま`avatar`だけ差し替える、といった設計変更が必要です。この対応はStep 12.1.2bの範囲外で、まだ実装していません。
+
 ## 既知の制約・意図的に対応しなかった事項(Step 12 Section 30)
 
 - Metallic/RoughnessのPBR精密変換は行わず、`Metallic = 0`, `Smoothness = 0.35`の簡易値を採用(URP/LitのMetallicGlossMapはAlpha=Smoothnessを要求するが、MeshyのRoughness Textureはこれと直接対応しないため)

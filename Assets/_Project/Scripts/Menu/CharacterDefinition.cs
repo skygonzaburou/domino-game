@@ -13,8 +13,12 @@ namespace Domino.Menu
         [SerializeField] private string displayName;
         [SerializeField] private string visualKey;
 
+        [Tooltip("未設定(None)ならPlayerCharacterVisual側のDefault Material(GreenBoy_Material)がそのまま使われる。GreenBoyVisualの色違いなど、共有ModelのMaterialだけを差し替えたい場合に設定する")]
+        [SerializeField] private Material visualMaterial;
+
         public int CharacterId => characterId;
         public string DisplayName => displayName;
         public string VisualKey => visualKey;
+        public Material VisualMaterial => visualMaterial;
     }
 }

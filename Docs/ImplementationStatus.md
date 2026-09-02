@@ -1463,3 +1463,28 @@ Host=Capsule/Client=GreenBoyの組み合わせについては、本Step内での
 ### Git
 - Step 12.1.1完了時点(`e5858ff`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 12.1.2b: Color Variant Characters(Material Override)
+
+開発者ご自身が`Assets/_Project/Art/Characters/GreenBoy/Materials/`にBlue/Purple/Red/Yellowの4色分のMaterial(および対応するTexture)を追加し、Character 3〜6への割り当てを依頼されたため実装しました。GreenBoyのMesh/Rig/Animator自体は複製せず、共有`SkinnedMeshRenderer`のMaterialだけをCharacter選択に応じて差し替える方式です。詳細設計・今後の手動追加手順は[Docs/CharacterSystem.md](CharacterSystem.md)「色違いCharacter(Material Override、Step 12.1.2b)」を参照してください。
+
+### 実装済み
+- `CharacterDefinition.cs`: `visualMaterial`(`Material`, Optional)フィールドを追加
+- `PlayerCharacterVisual.cs`: `greenBoyRenderer`/`greenBoyDefaultMaterial`フィールドを追加。`ApplyVisual()`で、選択中Characterの`VisualMaterial`(未設定ならDefault)を`greenBoyRenderer.sharedMaterial`へ**毎回明示的に**適用(切り替え時に前の色が残らないようにするため)
+- `Player.prefab`: `PlayerCharacterVisual`の新フィールドを`GreenBoyVisual/Model/char1`のRenderer・`GreenBoy_Material`へ配線(NetworkAnimator/NetworkObjectの数・配置はStep 12.1.2から無変更)
+- `Character_03.asset`〜`Character_06.asset`: `displayName`をBlue/Purple/Red/Yellow Boyに、`visualMaterial`を対応するMaterialに設定。Character 7〜20は無変更(引き続きGreen)
+
+### 動作確認済み
+- Edit Mode Reflection Test: `Player.prefab`のInstanceに対し`ApplyVisual(int)`をCharacter 1→7の順に直接呼び出し、Id 3〜6でそれぞれBlue/Purple/Red/Yellow Materialが適用され、Id 7(未設定)で正しくGreen(Default)へ戻ることを確認(切り替え順序による色の残留がないことの確認を含む)
+- Screenshot: Id 3〜6の4体を並べて外観を目視確認(色が正しく分離して見えることを確認)
+- Prefab Verification: `NetworkAnimator count=1`・`NetworkObject count=1`が本変更後も維持されていることを確認
+- Console: Error/Warning 0件(既存の無関係なWarning除く)
+
+### 未実装/確認できなかった事項
+- 実際のPlay Mode(Character Select UI経由)・Online環境での色違いCharacter選択の実機確認は行っていません(Edit Mode Reflection Testでの`ApplyVisual`直接呼び出しによる確認に留まる)。既存の`_characterId` NetworkVariable同期経路(Step 12.1.2までに実機確認済み)にそのまま乗るだけの変更のため、追加のNetwork Riskは低いと判断していますが、開発者ご自身での実機確認を推奨します
+
+### Git
+- Step 12.1.2完了時点(`6f967c2`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

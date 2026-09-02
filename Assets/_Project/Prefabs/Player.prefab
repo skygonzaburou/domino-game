@@ -335,6 +335,8 @@ MonoBehaviour:
   visualRoots:
   - {fileID: 4755727045501810707}
   - {fileID: 4638160187024999606}
+  greenBoyRenderer: {fileID: 5877747051918254382}
+  greenBoyDefaultMaterial: {fileID: 2100000, guid: 1daaf58a940ade941a951ccd93f3decd, type: 2}
 --- !u!114 &8014579632668234254
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -656,6 +658,11 @@ PrefabInstance:
 --- !u!1 &4638160187024999606 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 541735014010882779, guid: 5b803e34030b4a44d8b63cd280d695be, type: 3}
+  m_PrefabInstance: {fileID: 5177643401205419629}
+  m_PrefabAsset: {fileID: 0}
+--- !u!137 &5877747051918254382 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: 1606479881763385155, guid: 5b803e34030b4a44d8b63cd280d695be, type: 3}
   m_PrefabInstance: {fileID: 5177643401205419629}
   m_PrefabAsset: {fileID: 0}
 --- !u!4 &6480402960379475931 stripped

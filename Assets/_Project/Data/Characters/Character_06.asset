@@ -13,5 +13,6 @@ MonoBehaviour:
   m_Name: Character_06
   m_EditorClassIdentifier: Assembly-CSharp::Domino.Menu.CharacterDefinition
   characterId: 6
-  displayName: Green Boy
+  displayName: Yellow Boy
   visualKey: GreenBoyVisual
+  visualMaterial: {fileID: 2100000, guid: 44cd82b1a6ade3a498fb060971bb8dfe, type: 2}
