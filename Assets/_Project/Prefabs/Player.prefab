@@ -19,6 +19,7 @@ GameObject:
   - component: {fileID: 532778656812165713}
   - component: {fileID: 462152421959077259}
   - component: {fileID: 1433634614581476614}
+  - component: {fileID: 6331155280092293476}
   m_Layer: 9
   m_Name: Player
   m_TagString: Player
@@ -157,6 +158,7 @@ MonoBehaviour:
   cameraTarget: {fileID: 6908575822131438580}
   maxPushSpeed: 6
   pushVelocityDecay: 8
+  slowWalkMultiplier: 0.45
 --- !u!114 &720650303308280578
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -277,6 +279,24 @@ MonoBehaviour:
   pushForce: 3.5
   pushCooldown: 0.4
   maxValidationDistance: 2.5
+--- !u!114 &6331155280092293476
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1210256795894551307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb08ea64e0d64243856dd876721604c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.Player.PlayerDominoContact
+  ShowTopMostFoldoutHeaderGroup: 1
+  dominoContactImpulse: 0.6
+  contactHeightOffset: 0.3
+  contactCooldown: 0.5
+  maxValidationDistance: 2.5
+  alreadyTippingThreshold: 25
 --- !u!1 &2210624771682651668
 GameObject:
   m_ObjectHideFlags: 0

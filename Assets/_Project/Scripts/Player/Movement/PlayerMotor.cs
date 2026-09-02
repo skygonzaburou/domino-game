@@ -21,11 +21,16 @@ namespace Domino.Player
         [Tooltip("Push velocityの減衰速度(m/秒^2)。この値が大きいほど早く元の動きに戻る")]
         [SerializeField] private float pushVelocityDecay = 8f;
 
+        [Header("Slow Walk (Step 11.2)")]
+        [Tooltip("Ctrl Hold中、moveSpeedへ掛けるMultiplier。Ctrl+Shift同時押しはCtrl優先(Slow Walk)")]
+        [SerializeField] private float slowWalkMultiplier = 0.45f;
+
         private Rigidbody _rigidbody;
         private NetworkTransform _networkTransform;
         private PlayerStats _stats;
         private Vector2 _moveAxis;
         private bool _dashHeld;
+        private bool _slowWalkHeld;
         private bool _jumpRequested;
         private bool _isGrounded;
         private bool _movementEnabled = true;
@@ -43,6 +48,7 @@ namespace Domino.Player
             {
                 _moveAxis = Vector2.zero;
                 _dashHeld = false;
+                _slowWalkHeld = false;
                 _jumpRequested = false;
 
                 Vector3 velocity = _rigidbody.linearVelocity;
@@ -97,6 +103,7 @@ namespace Domino.Player
             float z = (keyboard.wKey.isPressed ? 1f : 0f) - (keyboard.sKey.isPressed ? 1f : 0f);
             _moveAxis = Vector2.ClampMagnitude(new Vector2(x, z), 1f);
             _dashHeld = keyboard.leftShiftKey.isPressed;
+            _slowWalkHeld = keyboard.leftCtrlKey.isPressed;
 
             if (keyboard.spaceKey.wasPressedThisFrame && _isGrounded)
             {
@@ -189,7 +196,11 @@ namespace Domino.Player
             }
 
             Vector3 direction = forward * _moveAxis.y + right * _moveAxis.x;
-            float speed = _stats.moveSpeed * (_dashHeld ? _stats.dashMultiplier : 1f);
+            // Step 11.2: Ctrl (Slow Walk) takes priority over Shift (Run) when both are held -
+            // Ctrl becomes "precise movement", Shift stays "fast movement", with no ambiguous
+            // combined state.
+            float speedMultiplier = _slowWalkHeld ? slowWalkMultiplier : (_dashHeld ? _stats.dashMultiplier : 1f);
+            float speed = _stats.moveSpeed * speedMultiplier;
 
             Vector3 targetVelocity = direction * speed + _pushVelocity;
             targetVelocity.y = _rigidbody.linearVelocity.y;

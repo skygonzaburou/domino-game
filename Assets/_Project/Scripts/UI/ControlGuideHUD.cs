@@ -27,6 +27,7 @@ namespace Domino.UI
         [Header("Normal Guide Rows")]
         [SerializeField] private GameObject moveClusterRow;
         [SerializeField] private GameObject runRow;
+        [SerializeField] private GameObject slowWalkRow;
         [SerializeField] private GameObject jumpRow;
         [SerializeField] private GameObject placeDominoRow;
         [SerializeField] private GameObject lockMarkerRow;
@@ -45,6 +46,7 @@ namespace Domino.UI
         [SerializeField] private Image keycapS;
         [SerializeField] private Image keycapD;
         [SerializeField] private Image keycapShift;
+        [SerializeField] private Image keycapCtrl;
         [SerializeField] private Image keycapSpace;
         [SerializeField] private Image keycapE;
         [SerializeField] private Image keycapRmb;
@@ -87,6 +89,7 @@ namespace Domino.UI
 
             SetActive(moveClusterRow, showNormalGuide);
             SetActive(runRow, showNormalGuide);
+            SetActive(slowWalkRow, showNormalGuide);
             SetActive(jumpRow, showNormalGuide);
             SetActive(lookRow, showNormalGuide);
             SetActive(placeDominoRow, canPlaceDomino);
@@ -117,6 +120,7 @@ namespace Domino.UI
                 SetPressed(keycapS, keyboard.sKey.isPressed);
                 SetPressed(keycapD, keyboard.dKey.isPressed);
                 SetPressed(keycapShift, keyboard.leftShiftKey.isPressed);
+                SetPressed(keycapCtrl, keyboard.leftCtrlKey.isPressed);
                 SetPressed(keycapSpace, keyboard.spaceKey.isPressed);
                 if (canPlaceDomino) SetPressed(keycapE, keyboard.eKey.isPressed);
                 if (canStartChallenge) SetPressed(keycapF, keyboard.fKey.isPressed);
