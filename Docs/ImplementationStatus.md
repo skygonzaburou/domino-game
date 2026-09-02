@@ -1488,3 +1488,43 @@ Host=Capsule/Client=GreenBoyの組み合わせについては、本Step内での
 ### Git
 - Step 12.1.2完了時点(`6f967c2`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 13: Multi-Stage Scene Foundation
+
+Stage SelectのStageごとに異なるGameplay Sceneへ遷移できることを確認するため、Stage 2だけを専用の`StageScene_2`(既存`SampleScene`のExact Duplicate、中身は未編集)へ接続しました。Stage 1・3〜8は引き続き`SampleScene`のままです。詳細設計は[Docs/Networking.md](Networking.md)「26. Multi-Stage Scene Foundation」、新しいStage Scene追加の手順は[Docs/StageAuthoring.md](StageAuthoring.md)「0. 新しいStage Scene(独立したGameplay Scene)を追加する手順」を参照してください。
+
+### 実装済み
+- **`StageScene_2.unity`新規作成**: Unity Editorの`Duplicate`機能(`AssetDatabase.CopyAsset`相当、OS上のファイルCopyではない)で`SampleScene.unity`から複製。新しいGUID(`abba51284526a8f4991d531688449cd4`)が自動発行されており、元Sceneとの衝突なし。中身は一切編集していない(Ground/StartArea/Checkpoint/Goal/Domino/PlayerSpawnPoints/Lighting/Camera/HUD/GameFlowManager/ChallengeTimer/Pause UI、全てDuplicate元のまま)
+- **Build ProfilesのScene List登録**: `MainMenu.unity`・`SampleScene.unity`(既存2件)に加え、`StageScene_2.unity`を追加登録
+- **`Stage_02.asset`の`gameplaySceneName`変更**: `SampleScene` → `StageScene_2`。これ以外のStage(1、3〜8)は無変更
+- **`GameplayPlayerSpawner.cs`の一般化**: 単一Scene名のHard-code(`gameplaySceneName = "SampleScene"`)を廃止し、`StageCatalog`参照+`IsGameplayScene(string)`(Catalog内のいずれかの`StageDefinition.GameplaySceneName`と一致するか)による判定へ変更。MainMenu.unitySceneはCatalogに存在しないため誤判定されない(Step 9.2の「MainMenuでPlayerが落下し続けるBug」の再発条件にはならないことを確認済み)
+- **Scene-placed`GameplayPlayerSpawner`への`StageCatalog`参照配線**: `MainMenu.unity`の`NetworkManager` GameObject上のComponentへ、既存の`Assets/_Project/Data/StageCatalog.asset`(8 Stage登録済み)を設定
+
+### 実装前のAudit結果(Section 13/14相当)
+Project全体で`"SampleScene"`をGrep調査した結果、実際のGameplay Scene判定ロジックとして使われていたのは`GameplayPlayerSpawner.gameplaySceneName`の1箇所のみでした。他のヒットは全てComment、または`NetworkBootstrap.developmentGameplaySceneName`(MPPM Tag経由のDev専用Auto-start Shortcutで、既定Offかつ通常のStage Select経路とは無関係)でした。`StageSelectController`(Single Player)・`OnlineSessionController.OnStartGameButtonClicked()`(Online)は、どちらも元から`StageDefinition.GameplaySceneName`を直接読んで`NetworkManager.SceneManager.LoadScene()`に渡しており、Stage → Scene解決の主経路には元々Hard-codeが存在しませんでした。そのため、コード変更が必要だったのは`GameplayPlayerSpawner`1箇所のみに収まりました。
+
+### 動作確認済み(Single Player、実機Play Mode、Button onClick直接呼び出しによる自動操作)
+- **Test A(Scene Asset)**: `SampleScene.unity`/`StageScene_2.unity`が独立したScene Assetであることを確認(`git diff`で`SampleScene.unity`自体に差分が一切ないことを確認)
+- **Test B(Stage 1)**: TIME ATTACK → CHARACTER SELECT(Character 3 = Blue Boyを選択) → STAGE SELECT → Stage 1選択で`ActiveScene=SampleScene`、Player 1体が正しくSpawn(`SpawnPoint_1`座標 `(-1, 0, -11)`)、HUD("BUILD TIME")・Camera・Control Guideが正常表示されることを確認
+- **Test C(Stage 2)**: Stage 2選択で`ActiveScene=StageScene_2`、`GameSessionContext.SelectedStageId=2`、Player 1体が同じくSpawn Point座標へ正しくSpawn(Rigidbody速度ゼロ、Component構成14種すべて揃っている = Step 12.1.2のPlayer.prefab構造がそのまま機能)、HUD・Camera・Control Guideが正常表示されることを確認
+- **Test D(Stage 3)**: Stage 3選択で`ActiveScene=SampleScene`に戻ることを確認 - Stage 2だけが別Sceneであることの裏付け
+- **Test E(Pause → Stage Select再訪)**: StageScene_2/SampleScene間を`Pause → Stage Select`経由で複数回行き来し、都度Stage 1→SampleScene、Stage 2→StageScene_2の対応が崩れないことを確認
+- **Section 19相当(Pause → Character Select from StageScene_2)**: `StageScene_2`滞在中に`Pause → Character Select`で正しくCharacter Select画面が再表示され、直前に選択していたCharacter 3(Blue Boy)のHighlightも正しく復元されることを確認(Step 12.1.2b実装のCharacter一覧表示も同時に目視確認)
+- Console: 上記テスト全体を通じてError/Warning 0件
+
+### Retry/Result Flowについて(Section 21/20、実機テストではなくコード上の確認)
+`GameFlowManager`のRetry(第22章、Step 8.5から無変更)は`SceneManager.LoadScene`系のAPIを一切呼ばない、同一Scene内でのDomino Despawn + State ResetのみのIn-place Resetです(Project全体の`LoadScene(`呼び出し箇所を洗い出し済み、Retry経路には1件も含まれないことを確認)。そのため、Stage 2(`StageScene_2`)でRetryしてもSampleSceneへ切り替わることは構造的にあり得ません。Result Flow(SUCCESS時のRetry/Stage Select/Return Title)も本Stepでは一切変更していません。SUCCESS状態への到達を伴う実機テストまでは行っていません。
+
+### 未実装/確認できなかった事項
+- **Online 2 Player Test(Section 30)**: Host+ClientでStage 2を選択し、両者が`StageScene_2`をLoadすることの実機確認は本レポート時点では未実施です。Character Select/Online Session周りの既存Architecture(Host-authoritative Stage Selection、NGO Network Scene Management)自体は無変更のため、Online固有のRiskは低いと判断していますが、Scene Syncという性質上、実機確認の価値は高いです。開発者の協力(MPPM Player 2操作)が可能であれば追って実施します
+- SUCCESS状態まで実際にプレイしてのRetry/Result Flow実機確認(上記の通りコード上の確認に留まる)
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ(`[Netcode] OnApplicationQuit`等)。本Stepによる新規Warning・NullReferenceは0件
+
+### Git
+- Step 12.1.2b完了時点(`48d685e`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

@@ -2,6 +2,38 @@
 
 このドキュメントは、**プログラムを書かずに**新しいStage(Start/Checkpoint/Goalの配置)をUnity Editor上で作成・調整するための実用的な手順書です。このドキュメントを見ながら操作すれば、Claudeへコード修正を依頼しなくても基本的なStageを組み立てられることを目標にしています。
 
+新しいStageを既存のGameplay Scene(SampleScene)の中に追加する場合は1章以降を、**Stageごとに別のGameplay Sceneを用意したい場合**は0章を参照してください。
+
+---
+
+## 0. 新しいStage Scene(独立したGameplay Scene)を追加する手順(Step 13)
+
+Step 13で、Stage Selectの各Stageが「どのUnity Sceneを読み込むか」をStageごとに個別に指定できるようになりました(現在はStage 2だけが`StageScene_2`という専用Sceneを持ち、それ以外は全て`SampleScene`を共有しています)。**新しいStage Sceneの追加に、コード変更は一切不要です。**
+
+### 手順
+
+1. **既存のGameplay SceneをDuplicate**: Project WindowでDuplicate元にしたいScene(例: `Assets/Scenes/SampleScene.unity`、または既に作成済みの`Assets/_Project/Scenes/StageScene_2.unity`)を選択し、右クリック→`Duplicate`(または`Ctrl+D`)。**OS(エクスプローラー)上でのファイルCopy&Pasteは絶対に行わないでください** — `.meta`ファイルごとコピーされてしまい、元Sceneと同じGUIDを持つ壊れたAssetになります。必ずUnity Editor内のDuplicate機能を使ってください(新しいGUIDが自動的に発行されます)。
+2. **Rename**: 複製されたSceneを`StageScene_3`のように分かりやすい名前にRenameします(Project Window上でF2、またはゆっくり2回クリック)。
+3. **配置場所**: `Assets/_Project/Scenes/`直下に置いてください(既存の`StageScene_2.unity`もここにあります)。※歴史的経緯で`SampleScene.unity`だけは`Assets/Scenes/`という別フォルダにありますが、新しく作るSceneは`Assets/_Project/Scenes/`に統一してください。
+4. **Build SettingsのScene Listへ登録**: `File > Build Profiles`(Unity 6)またはメニューの`File > Build Settings`を開き、`Scene List`に手順1〜3で作ったSceneをDrag & Dropで追加します。**これを忘れるとNetworkManager経由でSceneをLoadできず、Stage選択時に何も起こりません。**
+5. **StageDefinitionにSceneを紐付ける**: `Assets/_Project/Data/Stages/Stage_0X.asset`(新しいStage用に既存のものを使うか、`Domino/Stage Definition`から新規作成)を選択し、Inspectorの`Gameplay Scene Name`フィールドへ、手順2で付けたScene名を**拡張子`.unity`なしで、大文字小文字を正確に**入力します(例: `StageScene_3`)。
+6. **Play Modeで確認**: Stage Selectで対象Stageを選び、意図したSceneが読み込まれること(Console上のErrorが0件であること)、Player Spawn/Camera/HUD/Placementが正常に動作することを確認します。
+
+これだけで、Stage Select画面・Character Select・Online同期・Player Spawnのいずれのコードにも変更は不要です(`GameplayPlayerSpawner`は「StageCatalogに登録されているいずれかのGameplay Scene名と一致するか」で判定しており、特定のScene名をHard-codeしていないため — 詳細は`Networking.md`参照)。
+
+### Scene内部のContentを作り込む
+
+手順1でDuplicateしたばかりのSceneの中身(Ground/Checkpoint/Goal/Domino配置等)を編集する方法は、このドキュメントの1章以降(既存のStage Authoring手順)がそのまま使えます。Duplicate元のSceneと全く同じ内容からスタートするので、まずは1章を参考に、Checkpointの位置やDomino配置を新しいStageらしく調整してください。
+
+### よくある失敗
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| Stage選択後、Sceneが切り替わらない(Consoleも無反応) | Build SettingsのScene Listに新Sceneが未登録 | 手順4を実施する |
+| Stage選択後、SampleSceneのままになってしまう | `StageDefinition.Gameplay Scene Name`が空、またはScene名のTypo(大文字小文字含む) | 手順5を確認し、実際のScene名と完全に一致させる |
+| Player Spawnしない/Consoleに何も出ない | 上記いずれかの設定ミスにより`GameplayPlayerSpawner`がそのSceneをGameplay Sceneとして認識できていない(StageCatalogのどのStageともScene名が一致していない) | Build Settings登録とStageDefinitionのScene名を再確認する |
+| 新Sceneが元のSceneと同じGUIDになってしまった | OS上でファイルを直接Copy&Pasteした | 手順1をやり直す(Unity Editor内のDuplicate機能を使う) |
+
 ---
 
 ## 1. 使用するPrefab

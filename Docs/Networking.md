@@ -546,3 +546,47 @@ NGOの`NetworkObject.InvokeBehaviourNetworkSpawn()`(Spawn時に各`NetworkBehavi
 ### 設計ルール
 
 **NetworkBehaviourは、Active/Inactiveが動的に切り替わる可能性のあるGameObject配下に置いてはならない。** 常にActiveな階層(このProjectではPlayer Root)に置き、対象のComponent(Animatorなど)へは通常のSerialized Field経由でCross-GameObject参照する。詳細な修正内容は`Docs/CharacterSystem.md`「NetworkAnimatorの配置(Step 12.1.2)」を参照してください。
+
+---
+
+## 26. Multi-Stage Scene Foundation(Step 13)
+
+Step 13で、Stage SelectのStageごとに**異なるGameplay Scene**へ遷移できるようになりました(第24章のPlayer Spawn Lifecycle、第12章のStage定義の仕組みを拡張したもので、Architecture自体は作り直していません)。
+
+### Scene遷移経路(第24章の補足)
+
+`StageDefinition.GameplaySceneName`(第12章、`StageCatalog`)が既にScene名をData-drivenに保持していたため、Stage選択 → Scene Load自体は元から特定のScene名にHard-codeされていませんでした(`StageSelectController`のSingle Player経路、`OnlineSessionController.OnStartGameButtonClicked()`のOnline経路、いずれも`stage.GameplaySceneName`をそのまま`NetworkManager.SceneManager.LoadScene()`へ渡すだけ)。Step 13で唯一Hard-codeが残っていたのは、`GameplayPlayerSpawner`が「Playerを Spawn すべきSceneかどうか」を判定する箇所でした。
+
+### Before/After
+
+```csharp
+// Before(Step 9.2〜Step 12.1.2b): 単一のScene名だけをHard-code
+[SerializeField] private string gameplaySceneName = "SampleScene";
+...
+if (sceneName != gameplaySceneName) return;
+```
+
+```csharp
+// After(Step 13): StageCatalogに登録されたいずれかのGameplaySceneNameと一致するかで判定
+[SerializeField] private StageCatalog stageCatalog;
+...
+if (!IsGameplayScene(sceneName)) return;
+
+private bool IsGameplayScene(string sceneName)
+{
+    if (stageCatalog == null) return false;
+    foreach (StageDefinition stage in stageCatalog.Stages)
+    {
+        if (stage != null && stage.GameplaySceneName == sceneName) return true;
+    }
+    return false;
+}
+```
+
+**MainMenu.unityは`StageCatalog`に一切登録されていない**ため、この判定はMainMenu滞在中に誤ってPlayerをSpawnしてしまうリスクを増やしません(Step 9.2で修正した「MainMenuでPlayerがSpawnして落下し続けるBug」の再発条件にはならない、という点をStep 13の設計時に明示的に確認しています)。
+
+新しいStage Sceneを追加する際、この判定ロジック自体への変更は不要です — `StageDefinition`に新しいScene名を登録した瞬間から、`GameplayPlayerSpawner`はそのSceneも自動的にGameplay Sceneとして認識します。実際の追加手順は`Docs/StageAuthoring.md`「0. 新しいStage Sceneを追加する手順」を参照してください。
+
+### Scene登録
+
+新しいGameplay SceneはUnity 6の`Build Profiles`のScene Listに登録する必要があります(NGOの`NetworkSceneManager.LoadScene()`はBuild Settingsに登録されていないSceneを名前解決できません)。Step 13時点のScene List: `MainMenu.unity` / `SampleScene.unity`(`Assets/Scenes/`、歴史的経緯でこの1つだけ`_Project`外) / `StageScene_2.unity`(`Assets/_Project/Scenes/`)。

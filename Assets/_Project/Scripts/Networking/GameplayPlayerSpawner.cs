@@ -31,8 +31,8 @@ namespace Domino.Networking
         // instead of duplicating the GameObject.Find lookup.
         public static GameplayPlayerSpawner Instance { get; private set; }
 
-        [Tooltip("Player Spawnを行う対象のGameplay Scene名")]
-        [SerializeField] private string gameplaySceneName = "SampleScene";
+        [Tooltip("Player Spawn対象のGameplay Sceneかどうかを判定するStage Catalog。ここに登録されたいずれかのStageDefinition.GameplaySceneNameと一致するSceneだけがGameplay Scene扱いになる(Step 13: 特定のScene名をHard-codeしない - MainMenuはCatalogに存在しないため誤判定しない)")]
+        [SerializeField] private StageCatalog stageCatalog;
 
         [Tooltip("Gameplay Scene内でSpawn Pointの子Transformを探す、親GameObjectの名前")]
         [SerializeField] private string spawnPointsContainerName = "PlayerSpawnPoints";
@@ -82,7 +82,7 @@ namespace Domino.Networking
         private void HandleLoadEventCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
         {
             if (!NetworkManager.Singleton.IsServer) return;
-            if (sceneName != gameplaySceneName) return;
+            if (!IsGameplayScene(sceneName)) return;
 
             GameObject prefab = NetworkManager.Singleton.NetworkConfig.PlayerPrefab;
             if (prefab == null)
@@ -161,6 +161,21 @@ namespace Domino.Networking
                     client.PlayerObject.Despawn(true);
                 }
             }
+        }
+
+        // Step 13: any Scene referenced by some StageDefinition.GameplaySceneName in the Catalog
+        // counts as a Gameplay Scene - MainMenu is never in the Catalog, so it can never
+        // accidentally match here (Section 15: must not regress the Step 9.2 MainMenu-Spawn bug).
+        // Adding a new Stage Scene (StageScene_3, etc.) needs no change here - it starts working
+        // the moment some StageDefinition's GameplaySceneName points at it.
+        private bool IsGameplayScene(string sceneName)
+        {
+            if (stageCatalog == null) return false;
+            foreach (StageDefinition stage in stageCatalog.Stages)
+            {
+                if (stage != null && stage.GameplaySceneName == sceneName) return true;
+            }
+            return false;
         }
 
         // One-time (per Gameplay Scene Load, not per-frame) lookup - Spawn Points live in the
