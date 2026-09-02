@@ -1212,3 +1212,51 @@ Step 5では、Step 4までLocal専用だったReal Dominoの配置をNetwork化
 - **UnityTransportの受信キュー枯渇警告**: 10個のDominoをテストコードで同時にSpawnした際、Console に `"Receive queue is full, some packets could be dropped, consider increase its size (128)"` という警告(Unity側の分類ではError扱い)が2回出力されました。実際には10個全てが正しくClientへ配信されたことを確認しており実害は無かったものの、将来100〜数百個のDominoを扱う際にはこの受信キューサイズ(既定128)を明示的に増やすか、Spawnを複数フレームに分散させる対策を検討する必要があります。プレイヤーが1個ずつ手動で配置する通常のペースでは問題にならない想定です
 - `Domino.prefab`にNetworkObjectを追加したことで、Step 3の`DominoLine`配下の20個(Editor上に直接配置されたインスタンス)も同じPrefabを継承するため、`NetworkObject`を持つことになりました。現在`DominoLine`は非アクティブのため実害はありませんが、将来これを再度使う場合は「In-Scene-Placed NetworkObject」としての扱われ方(Scene読み込み時の自動同期)に注意が必要です
 - Step 5では`maxPlacementDistance`(既定3m)や`DominoSpawner`の検証ロジックはMVP水準です。将来的な不正対策の強化が必要になった場合は改めて設計が必要です
+
+---
+
+## Step 11: Contextual Control Guide / Input HUD
+
+既存の操作(Player Movement/Camera/Placement/Pause/Challenge Start)は一切変更せず、Gameplay画面左下に「今何のKeyで何ができるか」を表示するLocal専用UIを追加しました。詳細は[Docs/ControlGuide.md](ControlGuide.md)を参照。
+
+### 実装済み
+- `ControlGuideHUD.cs`(新規, `Domino.UI`名前空間, 通常の`MonoBehaviour`)を作成し、`SampleScene`の`GameplayHUD` Canvas配下に新設した`ControlGuidePanel`にアタッチ。責務は Current Context判定・Hint表示切替・Hold Key Pressed可視化のみで、Gameplay Logicは一切持たない
+- `GameFlowManager.CurrentPhase`/`GameplayPauseManager.IsPaused`/`PlacementController.IsPlacing`(いずれも既存の公開State)を読み取るだけで、Input Systemへの書き込みやRPC送信は一切行わない。既存のInput処理コード(`PlayerMotor`/`PlacementController`/`ChallengeInput`/`ThirdPersonCamera`/`GameplayHUD`)は無変更
+- UIはUGUI + TextMeshProで構成(既存の`GameplayHUD`と同じCanvas/CanvasScaler/フォントを共有)。全要素`raycastTarget = false`でMouse Clickを一切奪わない
+- Contextごとの表示切替(すべてIsPlacing/Phase/IsPaused/Confirmationの組み合わせで判定):
+  - Placement中: `A/D Rotate`, `LMB Place`, `Esc Cancel`のみ(Move/Run/Jump/Lookは非表示)
+  - BUILDING(非Placement中): `W/A/S/D Move`, `Shift Run`, `Space Jump`, `E + Domino Icon Place Domino`, `RMB Lock Marker`, `Mouse Look`, `Esc Pause`
+  - READY: BUILDING同様だがPlacement関連(E/RMB)を隠し、`F Start Challenge`を追加
+  - RUNNING/FAILED: Move/Run/Jump/Look/Pauseのみ(Placement関連・F Start Challengeは非表示)
+  - Pause Menu/Confirmation Dialog/SUCCESS Result表示中: Control Guide全体を非表示(既存のR/S/T Shortcut表示と二重にしない)
+- Hold入力(W/A/S/D/Shift、Placement中のA/D)は、実際に押している間だけKeycap Imageの色を変更(通常色→Highlight色)して可視化。E/F/Esc/LMB/RMB等のOne-shot入力は単純なKeycap表示のみ(Flash等の追加Animationなし)
+- Domino Icon は既存Assetの再利用先が無かったため、UGUI Imageのみ(白背景+区切り線+Pip 2個)で簡易ピクトグラムを新規作成(Production Art不要の方針通り、外部Asset Packは未導入)
+
+### 動作確認済み(Single Player, Play Mode)
+- BUILDING: Control Guide表示、実際にHold中のKeyだけKeycapがHighlightされることをスクリーンショットで確認(Wキーで確認)
+- Placement Mode: `EnterPlacementMode()`を直接呼び出してPlacement中状態を再現し、GuideがMovement表示からPlacement表示(`A/D Rotate`, `LMB Place`, `Esc Cancel`)へ切り替わること、Placement中のA KeycapもHold中Highlightされることを確認
+- READY: `F Start Challenge`が追加表示されることを確認
+- RUNNING: Placement関連のHintと`F Start Challenge`が消え、Move/Run/Jump/Look/Pauseのみになることを確認
+- Pause: `IsPaused = true`にした状態でControl Guideが完全に非表示になり、既存のPause Menu(Resume/Restart/Stage Select/Return to Title)とHUD要素が重複しないことを確認
+- SUCCESS: PhaseをSUCCESSにした状態でControl Guideが非表示になり、既存のResult Action(Retry/Stage Select/Return to Title)と重複しないことを確認
+- Console: 上記すべてを通じてError/Warning 0件
+
+### Current Controls Audit(Step 11で確認した実際のInput一覧)
+| Key | Action | 有効なContext | Hold/One-shot |
+|---|---|---|---|
+| W/A/S/D | Move | BUILDING/READY/RUNNING/FAILED(Placement中は無効) | Hold |
+| Shift | Run(Dash) | 同上 | Hold |
+| **Space** | **Jump**(接地時のみ) | 同上 | One-shot |
+| Mouse移動 | Camera Look | 常時(Placement中も内部的には動くが、UI上はMovement表示と合わせて非表示) | 連続値 |
+| RMB | Marker Lock/Re-lock | BUILDING、Placement Mode突入前のみ | One-shot |
+| E | Placement Mode突入 | BUILDING、Placement Mode突入前のみ | One-shot |
+| A/D | Domino Yaw回転 | Placement Mode中 | Hold |
+| LMB | Domino確定配置 | Placement Mode中 | One-shot |
+| Esc | Placement中はCancel、それ以外はPause | Placement Mode中/BUILDING・READY・RUNNING | One-shot |
+| F | Start Challenge Request | 常時送信可能だが有効なのはREADYのみ(Server側Gate) | One-shot |
+
+**ユーザーが把握していなかった/明示していなかったKey**: `Space`(Jump)。`PlayerMotor.cs`の`ApplyJump()`で接地時のみ有効な既存機能として実装されていましたが、今回のStepで初めて明示的に確認しました。指示通り新規実装は行わず、既存のJump機能をそのままControl Guideに含めています(`[ Space ] Jump`)。
+
+### 未実装/確認できなかった事項
+- **実際のKeyboard押下によるE/F/Esc/LMB(`wasPressedThisFrame`依存の入力)のシミュレーション確認**: New Input Systemの`InputSystem.QueueStateEvent`をEditor外部から注入する方式では、Unity自身のFrame Loopと処理タイミングがずれるため、`wasPressedThisFrame`ベースの単発入力を安定して再現できませんでした。W/A等`isPressed`(継続状態)ベースの入力は問題なく再現・確認できています。E押下によるPlacement Mode突入は、`PlacementController.EnterPlacementMode()`を直接呼び出す形でGuide側の反応を検証しました。本Stepで追加したコードはKeyboard/Mouseの状態を読み取るだけで一切書き込まないため、既存のE/F/Esc/LMB自体の挙動に影響する変更は行っていません(コードレビューで確認済み)
+- Online/2 Player Testは本Stepの方針通り未実施(Local UIのためNetworking非依存)
