@@ -1565,3 +1565,41 @@ Step 13完了後、開発者ご自身によるHost+Client実機テストで発�
 ### Git
 - Step 13完了時点(`4db77b2`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 13.2: Character Select Portrait UI
+
+Character Select Cardの見た目を「Number/Nameのみ」から「Portrait画像 + Number/Name」へ変更したUI-only Stepです。Character Selection Logic/Networking/Gameplayには一切変更がありません。詳細は[Docs/CharacterSystem.md](CharacterSystem.md)「Character Select Portrait UI(Step 13.2)」を参照してください。
+
+### 実装済み
+- `CharacterDefinition.cs`: UI表示専用の`Sprite portrait`(Optional)フィールドを追加。Network非対応(送受信されるのは引き続き`CharacterId`のみ)
+- `CharacterSelectController.cs`: `placeholderPortrait`フィールドを追加、`Populate()`で各CardのPortrait Imageへ`character.Portrait ?? placeholderPortrait`を設定
+- `CharacterCardTemplate`(`MainMenu.unity`)へ新しい`Portrait`子(Image, Preserve Aspect ON, Raycast Target OFF)を追加。既存`Text`は下部Stretchへ再配置(Font Size 16→12、Raycast Target OFF)
+- `CharacterGrid`の`GridLayoutGroup`: `cellSize (150,70)→(150,68)`、`spacing (12,12)→(12,8)`、位置調整。5列×4行=20 Cards・既存Button Click Handlerは無変更
+- Placeholder Sprite新規作成: `Assets/_Project/Art/UI/CharacterPortraits/CharacterPortrait_Placeholder.png`(C#で手続き的に生成したSimple Silhouette、外部Asset不使用)、20 Character全員が同一Asset参照を共有(Duplicateなし)
+
+### 発見した制約(Card Layoutの余白について)
+実装前に想定していたよりも、Header("CHARACTER SELECT")・Online専用UI(SelectionCountText等)・Bottom Buttonsの間でGridに使える垂直方向の余白は少なく、実測(`RectTransform.GetWorldCorners()`による実際の描画位置比較)ではFix前の時点で上下数px程度しか余裕がありませんでした。そのため、Cell高さは70→130のような大幅な拡大ではなく、70→68への調整に留め、Portrait(46×34)とText(Font Size 12)を小さめに収める設計としました。
+
+### 動作確認済み(Single Player、実機Play Mode)
+- **Test A(Layout)**: 20 Cards・5×4 Gridが画面内に綺麗に収まり、Portrait/Textが重ならないこと、Header・Back/Stage Select Buttonsと重ならないことを`GetWorldCorners()`による実測とScreenshotの両方で確認
+- **Test B(Selection)**: Character 3・20を含む複数CardのClickでSelection/Highlightが正常動作、Portrait/Textとも表示されたままであることを確認
+- **Online UI Overlapチェック**: `GameSessionContext.IsOnline = true`でOnline専用UI(SelectionCountText/SelectionStatusText)を一時的に表示させ、Gridと重ならないことを確認(実際のOnline Session接続は行っていません、Section 29の通りUnnecessary)
+- **Test C(Placeholder Fallback)**: 20 Character全員が`Portrait`未設定の状態でPlaceholderが正しく表示され、NullReference/白い四角にならないことを確認
+- **Test D(Replaceability)**: Character_05(Red Boy)へTemporaryなTest Sprite(赤色の単色画像)を割り当て、**そのCardだけ**画像が変わり他の19 Cardsは影響を受けないことを確認。その後Portraitをnullへ戻し、Temporary Test Sprite Assetを削除して元の状態に復元済み
+- Console: 上記テスト全体でError/Warning 0件
+
+### Networking Diff確認
+`git status`で変更されたFileは`CharacterDefinition.cs`・`CharacterSelectController.cs`・`MainMenu.unity`(Scene内のUI要素)・`Character_05.asset`(Test後にnullへ復元済みの`portrait`フィールド追加)・新規Placeholder Sprite Assetのみで、`NetworkSessionState`/`OnlineSessionController`/`PlayerCharacterSelectionStore`/`PlayerCharacterVisual`/`GameplayPlayerSpawner`等のNetworking関連ScriptにDiffが一切ないことを確認しました。
+
+### 未実装/確認できなかった事項
+- Online実機テスト(Section 29の通り、UI DataはLocal CharacterCatalogから読むだけでNetwork Behaviorを変更していないため、Code Reviewでの確認のみで十分と判断)
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 13.1完了時点(`66393a8`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

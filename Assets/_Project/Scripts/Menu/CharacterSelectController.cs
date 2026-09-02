@@ -18,6 +18,9 @@ namespace Domino.Menu
         [SerializeField] private RectTransform gridContainer;
         [SerializeField] private Button cardTemplate;
 
+        [Tooltip("Step 13.2: CharacterDefinition.Portraitが未設定(None)のCharacter Cardに使うFallback画像")]
+        [SerializeField] private Sprite placeholderPortrait;
+
         [Header("Online (Step 12.1)")]
         [SerializeField] private TextMeshProUGUI selectionStatusText;
         [SerializeField] private Button stageSelectButton;
@@ -81,6 +84,16 @@ namespace Domino.Menu
 
                 TextMeshProUGUI label = card.GetComponentInChildren<TextMeshProUGUI>(true);
                 if (label != null) label.text = $"{character.CharacterId:00}\n{character.DisplayName}";
+
+                // Step 13.2 (Section 13): a Character with no Portrait set falls back to the
+                // shared Placeholder rather than showing a blank/broken Image - adding a new
+                // Character without remembering to set Portrait must never break the UI.
+                Transform portraitTransform = card.transform.Find("Portrait");
+                Image portraitImage = portraitTransform != null ? portraitTransform.GetComponent<Image>() : null;
+                if (portraitImage != null)
+                {
+                    portraitImage.sprite = character.Portrait != null ? character.Portrait : placeholderPortrait;
+                }
 
                 CharacterDefinition captured = character;
                 card.onClick.AddListener(() => OnCharacterCardClicked(captured));

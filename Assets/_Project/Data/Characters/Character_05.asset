@@ -16,3 +16,4 @@ MonoBehaviour:
   displayName: Red Boy
   visualKey: GreenBoyVisual
   visualMaterial: {fileID: 2100000, guid: d45ad8a3cf8667f4abbc0c5208d18d81, type: 2}
+  portrait: {fileID: 0}

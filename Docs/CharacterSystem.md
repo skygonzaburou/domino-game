@@ -1,4 +1,4 @@
-# Character System (Step 12 / Step 12.1 / Step 12.1.2)
+# Character System (Step 12 / Step 12.1 / Step 12.1.2 / Step 13.2)
 
 Player Root(`Rigidbody`/`CapsuleCollider`/`PlayerMotor`/`NetworkObject`/`NetworkTransform`等)は一切変更せず、旧CapsuleのVisualをMeshy AI製Humanoidキャラクター「GreenBoy」へ差し替えたSystem(Step 12)、Playerが使用するCharacterをMain Menuで選べるようにしたCharacter Select機能(Step 12.1)、およびそのCharacter Selectionの導入によって顕在化したAnimation Network Sync/Jumpのバグ修正(Step 12.1.2)についてのドキュメント。Menu側のPanel/Flowは`MenuFlow.md`、Online同期は`OnlineSession.md`、Pause Menuからの遷移は`PauseSystem.md`、NetworkAnimatorの配置に関する詳細は`Networking.md`を参照してください。
 
@@ -220,3 +220,53 @@ Pause → Character Select → Confirm で戻った場合も、`GameSessionConte
 ## Online Per-player Selection
 
 `NetworkSessionState`(`OnlineSession.md`参照)がUI/RPCの入口として`RequestSelectCharacterRpc(int characterId)`を受け取ります。各Clientは**自分自身の**選択だけをServerへ送信でき(Host-onlyではない、Section 16)、Server側でCatalog存在チェックのみ行います(Prefab参照等は一切送受信しません、Section 17)。実際の`ClientId → CharacterId`データは、Step 12.1.1で`PlayerCharacterSelectionStore`(Persistent、`Docs/Networking.md`参照)へ移動しました - `NetworkSessionState`自身はMainMenu Sceneにのみ存在するため、そこに保持していたデータはGameplay Spawn時には既に消えていました(Step 12.1のBug、下記参照)。詳細は`OnlineSession.md`「11. Character Select」を参照してください。
+
+---
+
+# Character Select Portrait UI(Step 13.2)
+
+Character Select Cardの見た目だけを、「Number/Nameのみ」から「Portrait画像 + Number/Name」へ変更しました。**Character Selection Logic(ID解決・Highlight・Online同期・All-player Gate等)には一切変更がなく、Networkで送受信されるのは引き続き`CharacterId`のみです。**
+
+## Card Hierarchy(`CharacterCardTemplate`、`MainMenu.unity`)
+
+```
+CharacterCardTemplate (Image[背景/Highlight色] + Button)
+├─ Portrait (Image, 新規追加)
+│   Anchor: 上部中央 / Size 46×34 / Preserve Aspect ON / Raycast Target OFF
+└─ Text (TextMeshProUGUI, 既存)
+    Anchor: 下部Stretch / Size (stretch)×30 / Font Size 16→12 / Raycast Target OFF
+```
+
+`Portrait`は表示専用のImageで、Card全体のClickは引き続きRoot(`CharacterCardTemplate`)の`Button`が担うため(Raycast TargetをOffにしているPortrait/TextはClickを妨げません)、既存のButton Click Handler(`CharacterSelectController.OnCharacterCardClicked`)は無変更です。
+
+Grid(`CharacterGrid`、`GridLayoutGroup`)は`cellSize = (150, 68)`、`spacing = (12, 8)`のまま5列×4行=20 Cardsを維持しています。**Header("CHARACTER SELECT")・Online専用のSelectionCountText/SelectionStatusText・BackButton/StageSelectButtonとの間で使える垂直方向の余白は元々非常に少なく**(Header/Bottom UIとGridの間、Fix前の時点で既に上下数px〜十数pxしか余裕がありませんでした)、Cardを大きくしすぎるとこれらと重なってしまうため、Card高さは元の70から68への微増に留めています(Portrait/Textとも小さめのSize・Font Sizeで両立)。
+
+## `CharacterDefinition.Portrait`(UI表示専用Data)
+
+```csharp
+[SerializeField] private Sprite portrait;
+public Sprite Portrait => portrait;
+```
+
+`visualMaterial`(Step 12.1.2b)と同じ設計思想のOptional Fieldです。**Networkには一切使用しません** - 各Clientは`CharacterId`だけをNetwork越しに受け取り、Local側の`CharacterCatalog`(全Client共通のAsset)から`CharacterDefinition.Portrait`を解決するだけです(Sprite/Texture/GUID等をNetwork送信することは一切ありません)。
+
+## Fallback(Section 13)
+
+```csharp
+// CharacterSelectController.Populate()
+portraitImage.sprite = character.Portrait != null ? character.Portrait : placeholderPortrait;
+```
+
+`Portrait`が未設定(None)のCharacterは、`CharacterSelectController`にSerialize済みの`placeholderPortrait`(共有Sprite、20 Character全員で同一Asset参照 - Duplicateしていません)へ自動的にFallbackします。新しいCharacterを追加してPortrait設定を忘れても、UIが壊れる(白い四角・NullReference)ことはありません。
+
+## Placeholder Sprite
+
+`Assets/_Project/Art/UI/CharacterPortraits/CharacterPortrait_Placeholder.png`。Production Artではなく、C#で手続き的に生成したSimpleな人型シルエットPlaceholderです(外部Asset/Packageは一切使用していません)。
+
+## 今後の手動差し替え手順(Code変更不要)
+
+1. `Assets/_Project/Data/Characters/Character_XX.asset`をProject WindowからClick
+2. Inspectorの`Portrait`スロットへ、用意した画像(`Texture Type = Sprite`でImport済みのもの)をDrag & Drop
+3. Play Modeで確認 - **そのCharacterのCardだけ**画像が切り替わり、他のCardはPlaceholderのまま
+
+`CharacterSelectController`・Prefab・Network関連のCode変更は一切不要です。Sprite未設定のCharacterは自動的にPlaceholderのままなので、20体すべてに同時にPortraitを用意する必要もありません。
