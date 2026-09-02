@@ -28,6 +28,18 @@ namespace Domino.Menu
         private void Awake()
         {
             Instance = this;
+
+            // Step 10.2: MainMenu is the single source of truth for Menu-usable Cursor state,
+            // applied unconditionally every time this Scene loads - whether that is the very
+            // first launch or a return from Gameplay via any path (Pause/Result x Stage Select/
+            // Title x Single Player/Online/Host disconnect). Gameplay's own Cursor Lock
+            // (ThirdPersonCamera.Start()) is a one-way "enter Gameplay" action with nothing that
+            // ever reverses it - rather than adding a matching Cursor Unlock to every place
+            // Gameplay can be exited from, this one Entry Point guarantees the correct state
+            // regardless of which of those paths was actually taken.
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+
             _panels = new Dictionary<MenuState, GameObject>
             {
                 { MenuState.Title, titlePanel },
