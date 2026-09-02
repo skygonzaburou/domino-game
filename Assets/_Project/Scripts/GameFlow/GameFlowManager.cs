@@ -271,18 +271,31 @@ namespace Domino.GameFlow
         }
 
         // Called by a Zone (Host-only) whenever a Domino freshly falls inside it during
-        // RUNNING. Whether this counts as progress depends solely on whether this Zone is
-        // the one currently expected next - a Zone that already fired earlier this run
-        // can never fire again (DominoFallenZone.IsSatisfied latches), and a Zone firing
-        // out of order fails the run instead of being silently ignored or catching up
-        // other Zones' state.
+        // RUNNING. Whether this counts as progress depends on comparing this Zone's fixed
+        // order position against the one currently expected next (Step 10.3.2):
+        // - firedIndex < expected: an Already Completed Zone firing again (e.g. a second
+        //   Domino inside the same already-passed Zone toppling moments after the first).
+        //   DominoFallenZone.IsSatisfied already latches per-Zone and normally prevents
+        //   this call from happening a second time at all, but this comparison is a
+        //   general, Zone-agnostic invariant this method enforces on its own terms too -
+        //   ignored as a harmless no-op rather than relying solely on that latch.
+        // - firedIndex > expected: skipped ahead of the Zone actually expected next - a
+        //   genuine Wrong Route (or a Goal reached too early) - fails the run.
+        // - firedIndex == expected: normal in-order Progress.
         public void OnZoneFallen(DominoFallenZone zone)
         {
             if (!IsServer) return;
             if (_phase.Value != GamePhase.RUNNING) return;
 
             int firedIndex = _orderedZones.IndexOf(zone);
-            if (firedIndex != _expectedZoneIndex)
+
+            // Already Completed Zone: deliberately touches nothing - no TriggerFailure, no
+            // Progress/Index/StartTriggered change, no settle timer reset. Letting a
+            // harmless repeat event keep extending the settle-timer grace period would
+            // mask a genuinely stalled Chain elsewhere.
+            if (firedIndex < _expectedZoneIndex) return;
+
+            if (firedIndex > _expectedZoneIndex)
             {
                 TriggerFailure();
                 return;
