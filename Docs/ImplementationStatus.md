@@ -1643,3 +1643,46 @@ Code ReviewとGit Diff確認により、`CharacterSelectController.Populate()`�
 ### Git
 - Step 13.2完了時点(`3fca159`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 13.4: Fix Client Cleanup after Host Disconnect
+
+Online GameplayでHostが切断された際、Clientが古いRoom(旧Join Code・古いPlayer数・"Waiting for the host..."表示)に取り残されたまま復帰できないBugを実機Host+Clientテストで再現・修正しました。詳細は[Docs/OnlineSession.md](OnlineSession.md)「12. Host Disconnect時のClient Cleanup」、[Docs/MenuFlow.md](MenuFlow.md)「12. Host Disconnect後のClient Cleanup / Back History」を参照してください。
+
+### Root Cause(実機Diagnostic Logで特定)
+`OnlineSessionController._session`(static、Step 10Bで導入、Session維持のためScene遷移をまたいで生存)が、Online Gameplay中のHost切断後も無効化されないまま残り、MainMenu再ロード後の新しい`Start()`がこれを「まだ有効」として`RehydrateSession()`してしまうことがRoot Causeでした。当初の想定(`_session.State`を同期的にチェック)は**実機Diagnostic Logにより不十分と判明**: NGO側は`OnClientStopped`で切断を検知しMainMenuへのScene Loadまで完了していたにも関わらず、`_session.State`は依然として`Connected`のままでした(Unity Gaming Services SDK自身のState追跡は実際のNGO/Transport切断と同期していない)。代わりに`NetworkManager.Singleton.IsListening`を判定基準として採用し、Step 13.1のSession維持経路(`Shutdown()`を呼ばない)とHost切断(必ず先にNGO接続が切れる)を正しく区別しました。
+
+さらに実機テストで、**MainMenu滞在中(Room/Character Select/Stage Select)のHost切断は別の抜け穴だった**ことも発見しました。`GameplayNavigationController`の`OnClientStopped`購読はGameplay Scene限定で、MainMenu滞在中は遅延のある`_session.StateChanged`しか監視していませんでした。`OnlineSessionController`自身にも同じ`OnClientStopped`購読を追加し、MainMenuのどのPhaseでもGameplayと同じ速さでHost切断を検知できるようにしました。
+
+「LEAVE後にBACKすると元のRoomへ戻る」という2つ目の報告されたBugは、独立したBugではなく上記Bug 1の直接的な結果でした(古いRoom画面でLEAVEを押すと、そのRoom自体がBack履歴へPushされていた)。Session離脱の最終遷移を共通Helper(`ShowOnlineSelectAsFreshRoot()`)へ統一し、「Mode Select → Online Select」という新しいNavigation Rootとして扱うことで解消しました。
+
+### Fix
+- `OnlineSessionController.cs`: `Start()`に`NetworkManager.IsListening`チェックを追加、`_session != null`でもNGOが実際には切断済みならCleanup経路(`HandleSessionEndedUnexpectedly()`)へ。新しい`NetworkManager.OnClientStopped`購読(`HandleClientStoppedWhileInMenu`、`_session == null`なら自分自身のLeaveと判断し無視)をMainMenu滞在中の検知として追加。Back History Reset用の共通Helper`ShowOnlineSelectAsFreshRoot()`を追加し、`OnLeaveButtonClicked()`/`HandleSessionEndedUnexpectedly()`双方から使用。`LeaveSessionAsync()`に`PlayerCharacterSelectionStore.Instance?.ResetForNewSession()`を追加(旧Session由来のCharacter Selectionが次のSessionへ持ち越されることを防止)
+- `GameplayNavigationController.cs`・`MainMenuController.cs`: 調査用の一時的なDiagnostic Logのみ追加後、最終Commit前に削除(Code自体の変更なし)
+
+Auto-Reconnect機能は実装していません(要件どおり)。`HostTryStartGame`等の既存Server-side Validationは無変更です。
+
+### 動作確認済み(実機Host+Client 2 Player、MPPM)
+開発者ご自身がPlayer 2を操作し、Claude(Host側操作、`execute_code`による`NetworkManager.Shutdown()`でHost切断をSimulate)と共同で実施。
+
+- **Test A**: Online Gameplay中にHost切断 → Client/Host双方が正しくOnline Selectへ遷移(旧Room "1/4"表示に取り残されないことを確認、Fix前は再現していたBugがFix後解消)
+- **Test B**: 上記の後、Client/Host双方でBACK → Mode Select(旧Roomへ戻らないことを確認、Fix前は再現していたBugがFix後解消)
+- **Test C**: 上記の後、新しいRoomをCreate/Join(Host/Client双方) → 旧Session由来のJoin Code・Player数・Character Selection(`SelectedCount=0`/`SelectedStageId=-1`/`PlayerCharacterSelectionStore`のDictionary Count=0をReflectionで確認)が一切持ち越されないことを確認
+- **Room Phase Disconnect(Test E/F相当)**: MainMenu滞在中(Room Phase)のHost切断でも、Client/Host双方が同じくOnline Selectへ正しく遷移・BACKでMode Selectへ到達することを確認(Gameplay中の切断とは異なるCode Path経由だったため、当初のFixでは未対応だったことをこのテストで発見・追加修正)
+- **Test G(回帰確認)**: 通常のLEAVE(意図的な離脱)は従来どおりOnline Selectへ戻り、そこからのBACKもMode Selectへ到達することを確認
+- **Test H(回帰確認、最重要)**: Step 13.1の「Pause → Stage Select、Session維持」経路は本Fixの影響を受けず、Host/Client双方が接続維持のままStage Selectへ正しく遷移すること(`IsListening=True`、`PlayerCount=2`維持)を確認
+- Diagnostic Log削除後の最終Smoke Test(Test Aと同じ手順)を再実施し、Log削除がBehaviorに影響しないことも確認
+
+### 未実装/確認できなかった事項
+- 3人以上でのHost Disconnect確認(2 Playerのみ)
+- Character Select Phase中のHost切断は個別テストしていません(Room Phase切断とCode Pathを共有するため、Section 25-32の「代表ケースへの限定」の指示に従いRoom Phaseのみ実施)
+- Host自身のNetworkManagerを、MainMenu滞在中にUI操作を経ずに直接`Shutdown()`する(Scene Reloadを伴わない)人為的なテストケースは、実際のCode Pathとして到達不可能なため深追いしていません(Leaveボタンからの復帰のみ確認)
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ(`GameplayPauseManager.cs`のCS0114、本Fixと無関係)
+
+### Git
+- Step 13.3完了時点(`4932ee3`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

@@ -399,3 +399,76 @@ Character Select中に新しいPlayerがJoinした場合、`PlayerCharacterSelec
 - **Layout Bug(Bug A)の断定的な原因確認**: Host/Client双方の実際のWindow解像度差による位置ズレの現れ方の違いが最も有力な説明ですが、Step 12.1時点の壊れた状態を再現して直接検証することはできていません(修正後の状態で再発しないことのみ確認)
 - 3人以上でのAll-player Gate確認(今回は2 Playerのみ)
 - Disconnect時の`SelectedCount`減算・Late Join時の再Gateの実機確認(コードレビューと2 Player Testの範囲内でのロジック確認に留まる)
+
+---
+
+## 12. Host Disconnect時のClient Cleanup(Step 13.4)
+
+Online GameplayでHostが切断された際、Clientが古いRoom(旧Join Code・古いPlayer数・"Waiting for the host..."表示)に取り残されたまま復帰できない不具合を実機Host+Clientテストで再現し、修正しました。
+
+### Root Cause(実機Diagnostic Logで特定)
+
+`OnlineSessionController._session`はstatic fieldであり、Menu ⇄ Gameplay Scene遷移をまたいで意図的に保持されています(Step 13.1の「HostがStage/Character Selectへ戻ってもSessionを維持する」動線を支えるため)。しかしOnline Gameplay中にHostが切断した場合、この`_session`がGameplay Scene中は無効化されないまま残り続け、MainMenu再ロード後の新しい`OnlineSessionController.Start()`がこれを「まだ有効なSession」として`RehydrateSession()`してしまうことがRoot Causeでした。
+
+**当初の想定(`_session.State`を同期的にチェックしてDeleted/Disconnectedなら弾く)は、実機Diagnostic Logにより不十分と判明しました**: Host切断直後、`OnlineSessionController.Start()`内で`_session.State`を読み取ったところ、NGO側は既に`OnClientStopped`で切断を検知しMainMenuへのScene Loadまで完了していたにも関わらず、`_session.State`は依然として`Connected`のままでした。Unity Gaming Services SDK自身のSession State追跡は、実際のNGO/Transport切断と同期していない(独自のPolling/Heartbeatに依存する)ことが実機で確認されました。
+
+### 実際に使用したDisconnect検知の仕組み
+
+`_session.State`の代わりに、**`NetworkManager.Singleton.IsListening`**を信頼できる判定基準として採用しました。
+
+```csharp
+if (_session != null)
+{
+    bool ngoStillConnected = NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening;
+    if (ngoStillConnected)
+    {
+        RehydrateSession();          // Step 13.1: Session維持のままStage/Character Selectへ戻る経路
+    }
+    else
+    {
+        _ = HandleSessionEndedUnexpectedly(); // Step 13.4: 実際には切断済みの古いSession
+    }
+}
+```
+
+Step 13.1の「Session維持」経路は`NetworkManager.Shutdown()`を一切呼ばないため、`OnlineSessionController.Start()`が再実行される時点でも`IsListening == true`のままです。一方、実際のHost切断は必ず先にNGO接続が切れる(`GameplayNavigationController.HandleClientStopped`が発火する)ため、`IsListening == false`が確実に成立します。この2つの経路はNGOのListening状態で明確に区別できることを実機で確認しました。
+
+**MainMenu滞在中(Room/Character Select/Stage Select)のHost切断は別経路が必要でした**: `GameplayNavigationController`の`OnClientStopped`購読はGameplay Scene限定(そのGameObjectがGameplay Sceneにしか存在しないため)で、MainMenu滞在中は`_session.StateChanged`(前述の通り遅延あり)しか監視していませんでした。実機テストでもMainMenu滞在中のHost切断でClientが復帰しないことを再現したため、`OnlineSessionController`自身にも`NetworkManager.Singleton.OnClientStopped`購読を追加し(`RehydrateSession()`内で購読、`OnDestroy()`/`LeaveSessionAsync()`内で解除)、MainMenuのどのPhaseにいてもGameplayと同じ速さ・確実さでHost切断を検知できるようにしました。
+
+```csharp
+private void HandleClientStoppedWhileInMenu(bool wasHost)
+{
+    if (_session == null) return; // 自分自身のLeaveSessionAsync()による意図的なShutdown()は無視(再入防止)
+    _ = HandleSessionEndedUnexpectedly();
+}
+```
+
+### Cleanup内容
+
+`HandleSessionEndedUnexpectedly()`(既存)→`LeaveSessionAsync()`(既存、Best-effort・5秒Timeout Guard付き)が、`_session = null`・`NetworkManager.Shutdown()`(必要な場合のみ)・`GameSessionContext.IsOnline = false`を行います。Step 13.4ではここに`PlayerCharacterSelectionStore.Instance?.ResetForNewSession()`を追加しました - PersistentなStoreに残ったCharacter Selectionが、同じPlayerが後で別SessionのHostになった際にClientIdの偶然の一致で誤って持ち越されることを防ぐためです。
+
+### Back Navigationの修正("LEAVE後にBACKすると元のRoomへ戻る"Bug)
+
+実機再現の結果、これは独立したBugではなく**Bug 1の直接的な結果**でした。`MainMenuController.ShowState()`はデフォルトで`CurrentState`を履歴へPushするため、古いRoom画面に取り残された状態(Bug 1)でLEAVEを押すと、そのRoom自体が履歴へPushされ、直後のBACKでそこへ戻っていました。Bug 1を修正しClientが二度とRoom画面に取り残されなくなったことで、この経路自体が発生しなくなります。
+
+念のため、`OnLeaveButtonClicked()`・`HandleSessionEndedUnexpectedly()`双方の最終的な画面遷移を共通Helperへ統一し、Online SelectへはHistory上「Mode Select → Online Select」という新しいNavigation Rootとして遷移するようにしました(通常のLeave経路も含めて実機でBack→Mode Selectを確認済み)。
+
+```csharp
+private void ShowOnlineSelectAsFreshRoot()
+{
+    MainMenuController.Instance.ShowState(MenuState.ModeSelect, pushHistory: false);
+    MainMenuController.Instance.ShowState(MenuState.OnlineSelect);
+}
+```
+
+### 実機確認結果(Host+Client、MPPM)
+
+- Online Gameplay中にHostを切断 → Client/Hostともに正しくOnline Selectへ遷移(旧Room "1/4"表示に取り残されないことを確認)
+- 上記の後、Client/HostともにBACK → Mode Select(旧Roomへ戻らないことを確認)
+- 上記の後、新しいRoomをCreate/Joinしても旧Session由来のJoin Code・Player数・Character Selection(`SelectedCount=0`/`SelectedStageId=-1`/`PlayerCharacterSelectionStore`空)が一切持ち越されないことを確認
+- MainMenu滞在中(Room Phase)のHost切断でも同じ復帰を確認(Gameplay中の切断と同じClean-up経路)
+- 通常のLEAVE(意図的な離脱)は従来どおりOnline Selectへ戻り、そこからのBACKもMode Selectへ到達することを確認(回帰なし)
+- Step 13.1の「Pause → Stage Select、Session維持」経路は本Fixの影響を受けず、Host/Clientとも接続維持のままStage Selectへ正しく遷移することを確認(回帰なし)
+- Console Error/Warning: 0件(既存の無関係なWarning 1件を除く)
+
+Auto-Reconnect機能は実装していません(要件どおり、Host喪失後は素直にOnline Selectへ戻るのみです)。

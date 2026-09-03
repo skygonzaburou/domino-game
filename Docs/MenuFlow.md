@@ -285,3 +285,27 @@ Step 12.1完了報告時点では同一Editorプロセスから2つの独立し�
 ### 未確認事項
 
 3人以上でのAll-player Gate確認、Late Join時の再Gate確認は今回未実施です(2 Playerのみ)。
+
+---
+
+## 12. Host Disconnect後のClient Cleanup / Back History(Step 13.4)
+
+Online GameplayでHostが切断された際、Clientが古いRoomに取り残される不具合と、その状態でLEAVE→BACKを押すと元のRoomへ戻ってしまう不具合を実機Host+Clientテストで修正しました。Session/Networking側の詳細(Root Cause・Disconnect検知の仕組み)は`Docs/OnlineSession.md`「12. Host Disconnect時のClient Cleanup」を参照してください。本章はMenu Flow/Back History側の変更点のみ記載します。
+
+### Back History Resetの追加
+
+第3章の`Stack<MenuState>`による簡易履歴は、`ShowState()`がデフォルトで`CurrentState`をPushする方式のため、Client切断直後の「古いRoom画面」でLEAVEを押すと、そのRoom自体が履歴へ残ってしまう問題がありました。Session離脱(通常のLEAVE・Host切断後のCleanupのどちらも)からOnline Selectへ戻る際は、`ModeSelect`を`pushHistory: false`で一度経由してから`OnlineSelect`を表示する共通Helper(`OnlineSessionController.ShowOnlineSelectAsFreshRoot()`)を新設し、Online Selectを常に「Mode Select → Online Select」という新しいNavigation Rootとして扱うようにしました。これにより、どちらの経路でもBACKは必ずMode Selectへ到達します。
+
+### MainMenu滞在中のHost切断検知(第10章のNGO OnClientStopped統一パターンの拡張)
+
+第10章で説明した「`GameplayNavigationController`が`NetworkManager.OnClientStopped`を購読し、意図的なLeaveとHost切断による予期しない切断を同じ経路へ収束させる」パターンは、Gameplay Scene限定でした。実機テストで、MainMenu滞在中(Room/Character Select/Stage Select)のHost切断はこのパターンの対象外であり、Clientが復帰できないことを確認したため、`OnlineSessionController`自身にも同じ`OnClientStopped`購読を追加しています(Session生存中のみ購読、`_session == null`なら自分自身の意図的なLeaveとみなして無視)。これによりMainMenuのどのPhaseでもGameplayと同じ速さでHost切断を検知できます。
+
+### 動作確認済み(Step 13.4、実際のHost+Client 2 Player、MPPM)
+
+Step 10Bの時点では「同一Editorプロセスから2つの独立したRelay接続を同時に張ることが困難」という制約により、Online Stage Select Return / Title ReturnのEnd-to-End確認はHost自身の1接続によるシミュレーションのみでしたが、本Stepでは開発者ご自身がPlayer 2(MPPM)を操作し、以下を実際のHost+Client 2 Playerで確認しました。
+
+- Online Gameplay中のHost切断 → Client/Host双方がOnline Selectへ正しく遷移(旧Roomに取り残されない)
+- 上記の後のBACK → Mode Selectへ到達(旧Roomへ戻らない)
+- 上記の後の新規Room Create/Joinで旧Session由来のデータが一切持ち越されない
+- MainMenu滞在中(Room Phase)のHost切断でも同じ復帰
+- 通常のLEAVE・Step 13.1のPause→Stage Select(Session維持)は共に回帰なし

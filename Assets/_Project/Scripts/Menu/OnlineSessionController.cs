@@ -9,6 +9,7 @@ using Unity.Services.Multiplayer;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using Domino.Networking;
 
 namespace Domino.Menu
 {
@@ -86,9 +87,29 @@ namespace Domino.Menu
             // Step 10B (Section 26): returning from Gameplay to Stage Select with the Session
             // still alive (Online, Host-only action) - re-attach this fresh instance's UI/event
             // handling to the Session that already exists, instead of creating/joining a new one.
+            //
+            // Step 13.4 Root Cause: a genuine Host disconnect during Gameplay also leaves this
+            // static _session non-null here (this Component did not exist to receive
+            // HandleSessionStateChanged while in Gameplay), but Unity Gaming Services' own
+            // _session.State does NOT update synchronously with the actual disconnect -
+            // confirmed via Runtime log, it still read Connected here moments after NGO had
+            // already reported OnClientStopped and reloaded this Scene. NetworkManager's own
+            // IsListening is the reliable signal instead: the Session-preserving return above
+            // never calls Shutdown(), so NGO is still listening when that happens; an actual
+            // disconnect always tears NGO down first (GameplayNavigationController.
+            // HandleClientStopped calls Shutdown()/observes the connection already gone before
+            // loading this Scene), so IsListening is already false by the time this runs.
             if (_session != null)
             {
-                RehydrateSession();
+                bool ngoStillConnected = NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening;
+                if (ngoStillConnected)
+                {
+                    RehydrateSession();
+                }
+                else
+                {
+                    _ = HandleSessionEndedUnexpectedly();
+                }
             }
         }
 
@@ -111,6 +132,10 @@ namespace Domino.Menu
             {
                 NetworkSessionState.Instance.PhaseChanged -= HandlePhaseChanged;
             }
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.OnClientStopped -= HandleClientStoppedWhileInMenu;
+            }
         }
 
         // Step 10B: shared by OnSessionJoinedOrCreated() (a brand new Create/Join) and Start()'s
@@ -120,6 +145,19 @@ namespace Domino.Menu
         {
             _session.Changed += RefreshRoomUI;
             _session.StateChanged += HandleSessionStateChanged;
+
+            // Step 13.4 Root Cause (Section 19): while sitting anywhere in MainMenu (Room /
+            // Character Select / Stage Select), nothing else is subscribed to NGO's own
+            // OnClientStopped - GameplayNavigationController's equivalent subscription only
+            // exists once the Gameplay Scene has loaded (confirmed: a Host disconnect while
+            // still in MainMenu left a Client stuck, since only the slow/eventually-consistent
+            // Unity Gaming Services _session.StateChanged was listening here). This gives a
+            // Client sitting in any MainMenu Phase the same fast, reliable NGO-level detection
+            // Gameplay already has, instead of depending solely on that lagging SDK event.
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.OnClientStopped += HandleClientStoppedWhileInMenu;
+            }
 
             // Step 13.1 Root Cause: this very first read, immediately on a fresh MonoBehaviour's
             // Start() right after MainMenu reloads, is the one call site where _session's Player
@@ -254,6 +292,19 @@ namespace Domino.Menu
         public async void OnLeaveButtonClicked()
         {
             await LeaveSessionAsync();
+            ShowOnlineSelectAsFreshRoot();
+        }
+
+        // Step 13.4 (Section 2/14): landing on Online Select after leaving/losing a Session must
+        // behave as a fresh "Mode Select -> Online Select" Navigation Root, not carry over
+        // whatever Panel History happened to exist - otherwise Back from here pops straight back
+        // to the Room Panel we just left (Section 0's second Bug: LEAVE -> Online Select -> BACK
+        // incorrectly returned to the old Room). Silently establishing Mode Select as the
+        // non-pushing baseline first means ShowState(OnlineSelect) right after always pushes
+        // Mode Select (not the Room), so Back always reaches Mode Select as expected.
+        private void ShowOnlineSelectAsFreshRoot()
+        {
+            MainMenuController.Instance.ShowState(MenuState.ModeSelect, pushHistory: false);
             MainMenuController.Instance.ShowState(MenuState.OnlineSelect);
         }
 
@@ -364,6 +415,17 @@ namespace Domino.Menu
             }
         }
 
+        // Step 13.4 (Section 19): fires for this Client's own NGO connection ending, for any
+        // reason, while sitting anywhere in MainMenu - the direct MainMenu-phase counterpart to
+        // GameplayNavigationController.HandleClientStopped. Guarded on _session still being
+        // non-null so our own deliberate LeaveSessionAsync() (which nulls _session before
+        // calling Shutdown() itself) does not re-enter this as a second, redundant cleanup.
+        private void HandleClientStoppedWhileInMenu(bool wasHost)
+        {
+            if (_session == null) return;
+            _ = HandleSessionEndedUnexpectedly();
+        }
+
         private void HandleSessionStateChanged(SessionState state)
         {
             // Host left / Session removed while still in the Room or Stage Select (section 30):
@@ -378,7 +440,7 @@ namespace Domino.Menu
         {
             await LeaveSessionAsync();
             if (statusText != null) statusText.text = "Host disconnected.";
-            MainMenuController.Instance.ShowState(MenuState.OnlineSelect);
+            ShowOnlineSelectAsFreshRoot();
         }
 
         private async System.Threading.Tasks.Task LeaveSessionAsync()
@@ -392,6 +454,11 @@ namespace Domino.Menu
             if (NetworkSessionState.Instance != null)
             {
                 NetworkSessionState.Instance.PhaseChanged -= HandlePhaseChanged;
+            }
+
+            if (NetworkManager.Singleton != null)
+            {
+                NetworkManager.Singleton.OnClientStopped -= HandleClientStoppedWhileInMenu;
             }
 
             if (_session != null)
@@ -431,6 +498,14 @@ namespace Domino.Menu
             }
 
             GameSessionContext.IsOnline = false;
+
+            // Step 13.4 (Section 10): PlayerCharacterSelectionStore lives on the Persistent
+            // NetworkManager GameObject and survives for the App's entire lifetime - without
+            // this, a stale Character Selection from the just-ended Session (keyed by ClientId)
+            // could leak into a brand new Session where this same Player becomes Host and NGO
+            // happens to reassign the same low ClientIds. Harmless no-op for a pure Client (its
+            // own local copy of this Store never receives real Selections - see that file).
+            PlayerCharacterSelectionStore.Instance?.ResetForNewSession();
         }
 
         private void RefreshRoomUI() => RefreshRoomUI(applyDisconnectSafetyNet: true);
