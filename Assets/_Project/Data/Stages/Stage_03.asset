@@ -14,4 +14,5 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Domino.Menu.StageDefinition
   stageId: 3
   displayName: STAGE 3
-  gameplaySceneName: SampleScene
+  gameplaySceneName: StageScene_3
+  thumbnail: {fileID: 0}
