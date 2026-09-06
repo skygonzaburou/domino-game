@@ -32,6 +32,12 @@ namespace Domino.CameraSystem
         private Transform _placementTarget;
         private float _placementBlend;
 
+        // Step 14.2: +1 = Placement View sits on the Target's right (original/default
+        // behaviour), -1 = mirrored to the left. Persists across Placement sessions as the
+        // "previous side" fallback (Section 4) rather than resetting every time, so a
+        // near-center Entry never has to guess from scratch.
+        private float _placementSideSign = 1f;
+
         private Camera _camera;
         private float _normalFieldOfView;
         private float _overviewBlend;
@@ -74,6 +80,22 @@ namespace Domino.CameraSystem
         {
             _inPlacementMode = true;
             _placementTarget = placementTarget;
+
+            // Step 14.2 (Section 3/4): decide once, right now, which side the already-orbiting
+            // Camera is currently viewing the Player from - never re-evaluated on later frames
+            // while still in Placement Mode, so the close-up view cannot flip mid-Placement.
+            // transform.position here is still last frame's LateUpdate result (Update() always
+            // runs before LateUpdate() in the same frame), i.e. exactly "where the Camera was
+            // an instant before E was pressed".
+            float side = Vector3.Dot(transform.position - placementTarget.position, placementTarget.right);
+            const float sideDeadZone = 0.05f;
+            if (Mathf.Abs(side) > sideDeadZone)
+            {
+                _placementSideSign = Mathf.Sign(side);
+            }
+            // Section 4: too close to dead-center to tell confidently - keep whichever side was
+            // last determined (defaults to Right/+1 the very first time, matching the original,
+            // pre-Step-14.2 behaviour).
         }
 
         public void ExitPlacementView()
@@ -113,7 +135,7 @@ namespace Domino.CameraSystem
             {
                 Vector3 lookPoint = _placementTarget.position + Vector3.up * placementLookHeight;
                 Vector3 placementPosition = lookPoint
-                    + _placementTarget.right * placementSideDistance
+                    + _placementTarget.right * (placementSideDistance * _placementSideSign)
                     + Vector3.up * placementHeight;
                 Quaternion placementRotation = Quaternion.LookRotation(lookPoint - placementPosition, Vector3.up);
 

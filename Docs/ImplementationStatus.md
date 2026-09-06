@@ -1714,3 +1714,30 @@ Editor Play Mode Transitionの断続的な不安定化(Overlap判定を伴わな
 ### Git
 - Step 13.4完了時点(`f35d359`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.2: Mirror Placement Camera Based on Viewing Side
+
+Placement Modeへ入った際のClose-up Cameraが、Player側の通常Cameraが左右どちらから見ていたかに関わらず常に右側へ移動していた挙動を、現在Cameraがいる側を維持したままMirrorするよう変更しました。詳細は[Docs/PlayerSystem.md](PlayerSystem.md)「Placement View」を参照してください。
+
+### 実装
+`ThirdPersonCamera.EnterPlacementView()`が呼ばれた瞬間(まだ前FrameのCamera位置が残っている時点)に、`Vector3.Dot(transform.position - placementTarget.position, placementTarget.right)`の符号から現在Cameraがいる側を1度だけ判定し、`_placementSideSign`(+1=右/-1=左)として保持します。Placement中は再評価しないため、Domino Yaw回転でPlayerの向きが変わっても左右が反転しません。ほぼ真後ろ(判定不能)の場合は前回の側を維持(初回は右がDefault)。実際にMirrorしたのは`placementPosition`計算の1箇所(`_placementTarget.right * (placementSideDistance * _placementSideSign)`)のみで、`PlacementController.cs`は無変更(`git diff`で確認済み) - Player本体・Marker・Domino自体の回転Ruleは一切変更していません。
+
+### 動作確認済み(Single Player実機Play Mode)
+Reflectionで`ThirdPersonCamera._yaw`を直接設定し、Camera位置をPlayerの左右それぞれへ配置した状態から`PlacementController.EnterPlacementMode()`を呼び出して検証しました。
+
+- Camera がPlayerの左側(`Vector3.Dot(cameraPos - playerPos, player.right) = -3.86`)にある状態でPlacement開始 → `_placementSideSign = -1`、実際のPlacement Camera位置もGhost基準で左側(`dot = -2.2`)であることを確認
+- Camera がPlayerの右側(`dot = +3.86`)にある状態でPlacement開始 → `_placementSideSign = +1`、Placement Camera位置も右側(`dot = +2.2`)であることを確認
+- `PlacementController.cs`への`git diff`が空であることを確認(Marker/A-D回転/LMB確定/RMB Lock/Escape Cancel等、既存Placement機構への影響がないことをCode変更範囲から保証)
+
+### 未確認事項
+`PlacementController.ConfirmPlacement()`(内部で`[Rpc(SendTo.Server)]`の`RequestPlacementRpc`を呼ぶ)をReflection経由で直接呼び出すテストでは、実際のDomino Spawnまでは確認できませんでした(`DominoSpawner.TryPlaceDomino()`を直接呼ぶ経路では同じ位置で正常にSpawnすることを別途確認済みのため、これはRPC呼び出し方法に起因するTest上の制約であり、Step 14.2のCamera変更自体とは無関係と判断しています)。実際のLMB確定操作によるE2E見た目確認は、開発者に朝お願いしたいです。
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 14.1完了時点(`2eae265`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

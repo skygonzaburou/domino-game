@@ -121,7 +121,9 @@ Netcode for GameObjectsが「このGameObjectはネットワークで管理す�
 - `SetTarget(Transform)` を外部(`PlayerMotor.OnNetworkSpawn()`)から呼ばれることで、初めて追従対象が決まります。それまではScene開始時にタグ`"Player"`を持つオブジェクトを自動で探す簡易フォールバックが `Start()` に入っています(1人プレイのテスト用)。
 - **Placement View(Step 4で追加)**: `EnterPlacementView(Transform)`/`ExitPlacementView()`が外部(`PlacementController`)から呼ばれると、通常の三人称カメラ計算とは別に「Ghost Dominoを横から見た専用ビュー」の位置・回転を計算し、`Time.deltaTime`ベースで`Lerp`/`Slerp`しながら滑らかに切り替えます。通常ビューの計算自体は変更しておらず、`LateUpdate()`の最後で2つの計算結果をブレンド率(`_placementBlend`)に応じて合成しているだけです。Cinemachine等の新規パッケージは使わず、既存スクリプトの拡張のみで対応しています
 
-**なぜPlacement Viewの視点が「Playerの右方向(`transform.right`)」を基準にしているのか**: `GhostDomino`の首振りは既定でローカルX軸(=Ghostの左右方向、Playerの進行方向前後に対応)を軸に回転します。Playerの右方向から見ることで、この首振りが「手前/奥への傾き」ではなく「画面上での左右の振れ」として視認しやすくなるように設計されています。
+**なぜPlacement Viewの視点が「Playerの右方向(`transform.right`)」を基準にしているのか**: `GhostDomino`の首振りは既定でローカルX軸(=Ghostの左右方向、Playerの進行方向前後に対応)を軸に回転します。Player の右方向(または後述のStep 14.2で左方向)から見ることで、この首振りが「手前/奥への傾き」ではなく「画面上での左右の振れ」として視認しやすくなるように設計されています。
+
+**どちら側から見るかは、Placement開始時のCamera位置に追従する(Step 14.2)**: 通常CameraがPlayerを左側から見ている状態で`E`を押した場合、Placement Viewも左側の鏡写しになります。`ThirdPersonCamera.EnterPlacementView()`が呼ばれた瞬間(まだ前Frameの通常Camera位置のまま)に一度だけ`Vector3.Dot(transform.position - placementTarget.position, placementTarget.right)`の符号を判定し(`_placementSideSign`、+1=右/-1=左)、Placement中はこの値を再評価せず固定します - Placement中にPlayerの向き(Domino Yaw回転)が変わっても、視点の左右が途中で反転することはありません。判定値がほぼ0(ほぼ真後ろ)の場合は前回の側を維持します(初回は右がデフォルト)。実際にMirrorしているのは`ThirdPersonCamera`の`placementPosition`計算(`_placementTarget.right * (placementSideDistance * _placementSideSign)`)だけであり、Player本体・Marker・Domino Placement自体のRotation Ruleは一切変更していません。
 
 ---
 
