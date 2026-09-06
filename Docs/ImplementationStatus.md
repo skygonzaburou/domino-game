@@ -1841,3 +1841,42 @@ Race Conditionの性質上、Fix適用後に「以前失敗していた回数分
 ### Git
 - Step 14.4完了時点(`21e8ec5`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.4.1: Show Overview Camera Controls in HUD
+
+Step 14.4で実装済みのOverview Camera Cycling(`LMB`=Next/`RMB`=Previous)を、RUNNING中のControl Guideへ表示するようにしました。詳細は[Docs/ControlGuide.md](ControlGuide.md)「Overview Camera切替(LMB/RMB)のControl Guide表示行追加(Step 14.4.1)」を参照してください。
+
+### 実装
+
+`ControlGuideHUD.cs`のみを変更しました。Scene File(`SampleScene`/`StageScene_2`/`StageScene_3`)への変更は一切ありません。
+
+- 既存の`runRow`(Wide Keycap、`Key_Shift`と同じ`MinWidth=60`)を起動時に`Instantiate()`で複製し、子の`TextMeshProUGUI`(Keycap文字/Label文字)をRuntimeで`"LMB"`/`"Next Camera"`、`"RMB"`/`"Previous Camera"`へ書き換えて2つの新しいRow(`_nextCameraRow`/`_previousCameraRow`)を生成(`EnsureCameraGuideRows()`/`CreateCameraGuideRow()`)。生成したRowは`startChallengeRow`の直前へ`SetSiblingIndex()`で挿入
+- 表示条件は`canCancelChallenge`(既存のF Cancel Run表示条件、RUNNING かつ 非Placement)に加えて`OverviewCameraPoint.Points.Count > 1`。Overview Camera Pointが1個以下のStageでは表示されない
+- Pressed Highlight: 既存のPlacement Guide LMB/RMB Keycapと同一の`SetPressed()`呼び出しパターンで、`Mouse.current.leftButton.isPressed`/`rightButton.isPressed`を参照
+- `ThirdPersonCamera.cs`(Camera Cycling本体のLogic)・`OverviewCameraPoint.cs`・GameFlow・Networking関連は一切変更していません
+
+### 動作確認済み(Single Player実機Play Mode)
+
+`SampleScene`はUser自身の作業により`OverviewCameraPoint`が2個(`Points.Count=2`)存在した状態だったため、これを利用して確認しました。
+
+- RUNNING中(Placementしていない)に`[LMB] Next Camera`/`[RMB] Previous Camera`の2行が正しいText・正しい表示位置(既存Normal Guideの直後、Start/Cancel Rowの直前)で表示されることをReflection経由で確認
+- Keycap Imageのデフォルト色(`keycapNormalColor`)が正しく適用されていることを確認
+- F(Cancel Run)でBUILDINGへ戻ると、両Rowが非表示になることを確認
+- 再度F(Start)でRUNNINGへ戻ると、両Rowが再度表示されることを確認
+- BUILDING/Placement Mode(既存のLMB=Place/RMB=Lock Marker Guide)には一切影響がないことを確認(表示条件がRUNNING限定のため共存しない)
+- 0 Compile Error、既存の無関係なWarning(`GameplayPauseManager.cs`のCS0114)以外の新規Warningなし
+
+### 未確認事項
+
+- 実際のHardware LMB/RMBクリックによるKeycap Pressed Highlightの見た目確認は、Input System Hardware Event Simulationの制約(Step 14.4と同様)によりReflectionでの状態確認に留めました。ただしコードパス自体は既存のPlacement Guide LMB/RMB Highlight(実機確認済み)と完全に同一のためリスクは低いと判断しています
+- `OverviewCameraPoint.Points.Count`が1個以下のStage(本Step時点のStage 2/3)での「非表示のまま」という確認は、Stage 2/3側にPointが1個しかないことをCode Review・既存Step 14.4の記録から確認したのみで、実際にそのStageをPlayしての目視確認はしていません
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 14.1.1完了時点(`27cb5af`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

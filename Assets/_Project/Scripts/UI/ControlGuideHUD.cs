@@ -3,6 +3,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+using Domino.CameraSystem;
 using Domino.GameFlow;
 using Domino.Player;
 
@@ -75,6 +76,24 @@ namespace Domino.UI
         private TextMeshProUGUI _startChallengeLabel;
         private bool _startChallengeLabelInitialized;
 
+        // Step 14.4.1: same reasoning as the Start/Cancel Label reuse above - SampleScene/
+        // StageScene_2/StageScene_3 each carry their own independent copy of this Canvas, so a
+        // new Scene-authored Row/Field here would need identical Wiring repeated in all three
+        // (Stage 2/3 are Read/Inspect/Test-only this Step). Instead, two new Rows are built
+        // once at Runtime by cloning the existing Run Row (its "Shift" Keycap is already sized
+        // for a multi-letter Label, unlike the single-letter E/F Keycaps) and only swapping the
+        // two Text contents - identical visual style, zero new Scene content, works the same in
+        // any Scene this script runs in without touching that Scene's own file at all.
+        private const string NextCameraKeyText = "LMB";
+        private const string NextCameraLabelText = "Next Camera";
+        private const string PreviousCameraKeyText = "RMB";
+        private const string PreviousCameraLabelText = "Previous Camera";
+        private GameObject _nextCameraRow;
+        private GameObject _previousCameraRow;
+        private Image _keycapNextCamera;
+        private Image _keycapPreviousCamera;
+        private bool _cameraGuideRowsBuilt;
+
         private void Update()
         {
             GamePhase? phase = GameFlowManager.Instance != null ? GameFlowManager.Instance.CurrentPhase : (GamePhase?)null;
@@ -103,6 +122,11 @@ namespace Domino.UI
             bool canUseFKey = canStartChallenge || canCancelChallenge;
             bool canPause = showNormalGuide
                 && (phase == GamePhase.BUILDING || phase == GamePhase.READY || phase == GamePhase.RUNNING);
+            // Step 14.4.1 (Section 22/23): RUNNING-only (Placement's own LMB/RMB meanings are
+            // BUILDING-only, so the two Phases never overlap) and only when there is more than
+            // one Overview Camera Point to actually cycle between - a single-Point Stage (every
+            // Stage as of Step 14.4) never shows this row, matching the recommended UX.
+            bool canCycleCamera = canCancelChallenge && OverviewCameraPoint.Points.Count > 1;
 
             SetActive(moveClusterRow, showNormalGuide);
             SetActive(runRow, showNormalGuide);
@@ -123,18 +147,22 @@ namespace Domino.UI
                 }
             }
 
+            if (canCycleCamera) EnsureCameraGuideRows();
+            SetActive(_nextCameraRow, canCycleCamera);
+            SetActive(_previousCameraRow, canCycleCamera);
+
             // Placement Guide (Section 7/8): Movement Hints (W/S/Jump/Run/Look) never shown here.
             SetActive(rotateRow, showPlacementGuide);
             SetActive(placeRow, showPlacementGuide);
             SetActive(cancelRow, showPlacementGuide);
 
-            UpdatePressedStates(showNormalGuide, showPlacementGuide, canPlaceDomino, canUseFKey, canPause);
+            UpdatePressedStates(showNormalGuide, showPlacementGuide, canPlaceDomino, canUseFKey, canPause, canCycleCamera);
         }
 
         // Step 11.1 (Section 9-13): every Key/Mouse Button actually shown gets a Pressed State,
         // not just Hold-style ones - a One-shot Key (E/F/Esc) simply reads as briefly Pressed for
         // whatever real Frames its physical key is down, with no Flash/delay machinery added.
-        private void UpdatePressedStates(bool normalGuide, bool placementGuide, bool canPlaceDomino, bool canUseFKey, bool canPause)
+        private void UpdatePressedStates(bool normalGuide, bool placementGuide, bool canPlaceDomino, bool canUseFKey, bool canPause, bool canCycleCamera)
         {
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
@@ -155,6 +183,11 @@ namespace Domino.UI
             if (normalGuide && canPlaceDomino && mouse != null)
             {
                 SetPressed(keycapRmb, mouse.rightButton.isPressed);
+            }
+            if (normalGuide && canCycleCamera && mouse != null)
+            {
+                SetPressed(_keycapNextCamera, mouse.leftButton.isPressed);
+                SetPressed(_keycapPreviousCamera, mouse.rightButton.isPressed);
             }
 
             if (placementGuide && keyboard != null)
@@ -180,6 +213,42 @@ namespace Domino.UI
             if (_startChallengeLabelInitialized) return;
             _startChallengeLabelInitialized = true;
             if (startChallengeRow != null) _startChallengeLabel = startChallengeRow.GetComponentInChildren<TextMeshProUGUI>(true);
+        }
+
+        // Step 14.4.1: builds the two new Rows once, the first time they are actually needed
+        // (a multi-Point Stage reaches RUNNING) - never eagerly, so a single-Point Stage (every
+        // Stage as of Step 14.4) never even instantiates them. Clones runRow (see field comment
+        // above for why that specific Row) twice, inserts both immediately before
+        // startChallengeRow in the same parent Layout Group, and swaps each clone's two Text
+        // contents (Keycap Letter, Action Label) - everything else (Image color, sizing, font)
+        // comes along automatically via Instantiate().
+        private void EnsureCameraGuideRows()
+        {
+            if (_cameraGuideRowsBuilt) return;
+            _cameraGuideRowsBuilt = true;
+            if (runRow == null || startChallengeRow == null) return;
+
+            int insertIndex = startChallengeRow.transform.GetSiblingIndex();
+            _nextCameraRow = CreateCameraGuideRow("NextCameraRow", insertIndex, NextCameraKeyText, NextCameraLabelText, out _keycapNextCamera);
+            _previousCameraRow = CreateCameraGuideRow("PreviousCameraRow", insertIndex + 1, PreviousCameraKeyText, PreviousCameraLabelText, out _keycapPreviousCamera);
+        }
+
+        private GameObject CreateCameraGuideRow(string rowName, int siblingIndex, string keyText, string labelText, out Image keycapImage)
+        {
+            GameObject row = Instantiate(runRow, runRow.transform.parent);
+            row.name = rowName;
+            row.transform.SetSiblingIndex(siblingIndex);
+
+            TextMeshProUGUI[] texts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+            if (texts.Length >= 2)
+            {
+                texts[0].text = keyText;   // the Keycap's own inner Letter (was "Shift")
+                texts[1].text = labelText; // the Row's main Action Label (was "Run")
+            }
+
+            keycapImage = row.GetComponentInChildren<Image>(true);
+            row.SetActive(false); // Update() decides real visibility on the very next call
+            return row;
         }
 
         // Mirrors GameplayHUD.IsLocalPlayerPlacing() exactly (Section 19 - reads the same

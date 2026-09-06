@@ -27,6 +27,7 @@ READY (Placementしていない)
 
 RUNNING (Placementしていない)
   → Normal Guide + F Cancel Run (Step 14.3で追加、READYと同じRow/Keycapを共有しLabelのみ切替)
+  → Overview Camera Pointが2個以上ある場合のみ、LMB Next Camera / RMB Previous Camera も追加表示(Step 14.4.1で追加)
 
 BUILDING / FAILED (Placementしていない)
   → Normal Guide (BUILDINGのみ E Place Domino / RMB Lock Marker を追加表示)
@@ -61,9 +62,15 @@ Step 11実装前に、Gameplayで実際に使用されているInputをコード
 
 `Space`(Jump)は既存コードには実装済みだったが、今回のStepで初めて明示的に確認された。新規実装は行わず、既存機能としてControl Guideに含めている。
 
-### Overview Camera切替(LMB/RMB)にControl Guide表示行を追加していない理由(Step 14.4)
+### Overview Camera切替(LMB/RMB)のControl Guide表示行追加(Step 14.4.1)
 
-機能自体(`ThirdPersonCamera`のCycling Input)は実装済みで、複数`OverviewCameraPoint`があるStageなら即座に動作しますが、`ControlGuideHUD`側に対応するGuide Rowはまだ追加していません。理由: 表示するとしても「複数Point時のみ表示」が自然ですが(Section 14.4-12は両方の方式を許容)、`SampleScene`/`StageScene_2`/`StageScene_3`のいずれも本Step時点でOverview Camera Pointを1つしか持たず(Stage 2/3への新規Point配置は今回のStepで意図的に見送り - `StageAuthoring.md`第9章参照)、新しいRow GameObjectを追加するには3 Scene全てへ同じSerialized Field Wiringを繰り返す必要があり、Stage 2/3のScene Authoring凍結方針と両立しません。開発者がStageへ複数Point目を配置された際に、必要であれば別途Guide Row追加をご検討ください(Step 14.3のCancel Runで採用した「既存RowのLabelをRuntime切替」パターンは、LMB/RMBという別のKeycapを新たに表示する必要があるため、そのままでは転用できません)。
+Step 14.4時点では上記の理由でGuide Row未追加だったが、Step 14.4.1でRuntime生成方式により追加した。Scene File(`SampleScene`/`StageScene_2`/`StageScene_3`のいずれも)には一切手を加えていない。
+
+- 実装方式: `ControlGuideHUD.cs`が起動時に`runRow`(既存の`Shift Run` Row)を`Instantiate()`で複製し、`GetComponentsInChildren<TextMeshProUGUI>(true)`で見つけた子TextのうちKeycap文字を`"LMB"`/`"RMB"`、Label文字を`"Next Camera"`/`"Previous Camera"`へRuntimeで書き換えて`_nextCameraRow`/`_previousCameraRow`として保持する(`EnsureCameraGuideRows()`/`CreateCameraGuideRow()`)。複製後は`SetSiblingIndex()`で`startChallengeRow`の直前に挿入し、既存のNormal Guideと同じ縦並びに収まる。新しいSerialized FieldやScene上のGameObjectは一切追加していないため、Step 14.3の「F Keyの二重の役割」と同じく3 Scene全てで同一コードがそのまま動作する。
+- 複製元に`runRow`(Wide Keycap、`Key_Shift`と同じ`MinWidth=60`)を選んだ理由: `"LMB"`/`"RMB"`は3文字であり、`E`/`F`用の`Key_F`(`MinWidth=26`、単一文字向け)では文字がKeycapからはみ出すため。
+- 表示条件: `GameFlowManager.CurrentPhase == RUNNING`かつPlacementしていない(既存のF Cancel Run表示条件と同じ`canCancelChallenge`)に加えて、`OverviewCameraPoint.Points.Count > 1`(Section 14.4.1-23の推奨どおり、Overview Camera Pointが2個以上あるStageでのみ表示)。1個以下のStage(Step 14.4.1時点のStage 2/3)では現状Guide Rowは表示されない。
+- Pressed Highlight: 既存のPlacement Guide LMB/RMB Keycapと全く同じ`SetPressed()`パターンで、`Mouse.current.leftButton.isPressed`/`rightButton.isPressed`をそのまま参照して押下中のみ`keycapPressedColor`に切り替える。
+- Camera切替Logic自体(`ThirdPersonCamera.cs`のCycling実装、`OverviewCameraPoint`)はStep 14.4.1で一切変更していない。あくまで既存動作をHUD上に可視化しただけ。
 
 ## F Keyの二重の役割とLabel切替(Step 14.3)
 
