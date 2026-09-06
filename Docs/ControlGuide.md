@@ -25,7 +25,10 @@ Placement Mode (PlacementController.IsPlacing == true)
 READY (Placementしていない)
   → Normal Guide + F Start Challenge
 
-BUILDING / RUNNING / FAILED (Placementしていない)
+RUNNING (Placementしていない)
+  → Normal Guide + F Cancel Run (Step 14.3で追加、READYと同じRow/Keycapを共有しLabelのみ切替)
+
+BUILDING / FAILED (Placementしていない)
   → Normal Guide (BUILDINGのみ E Place Domino / RMB Lock Marker を追加表示)
 ```
 
@@ -52,6 +55,10 @@ Step 11実装前に、Gameplayで実際に使用されているInputをコード
 | A/D(Placement中) | Domino Yaw回転 | `PlacementController.cs` |
 | LMB | Domino確定配置 | `PlacementController.cs` |
 | Esc | Cancel Placement / Pause(Context依存) | `PlacementController.cs` / `GameplayHUD.cs` |
-| F | Start Challenge Request | `ChallengeInput.cs` |
+| F | Start Challenge Request(READY) / Cancel Run Request(RUNNING、Step 14.3で追加) | `ChallengeInput.cs` |
 
 `Space`(Jump)は既存コードには実装済みだったが、今回のStepで初めて明示的に確認された。新規実装は行わず、既存機能としてControl Guideに含めている。
+
+## F Keyの二重の役割とLabel切替(Step 14.3)
+
+`ChallengeInput.cs`は、F押下時に`GameFlowManager.CurrentPhase`(Local読み取り)を見て、READY中は`RequestStartChallengeRpc()`、RUNNING中は`RequestCancelChallengeRpc()`を送り分ける。`ControlGuideHUD.cs`側は、既存の`startChallengeRow`(Scene上に元からある唯一のRow)を両方のPhaseで共有し、`GetComponentInChildren<TextMeshProUGUI>()`でRuntimeに見つけた子TextのLabelだけを"Start Challenge"/"Cancel Run"へ切り替える(新しいRow GameObjectを追加していない)。これは`SampleScene`/`StageScene_2`/`StageScene_3`いずれもこの`ControlGuideHUD`を個別に持っている(Step 13でDuplicateされたScene)ため、新しいSerialized Field/新しいRow GameObjectを追加すると3 Scene全てへ同じWiringを繰り返す必要があり、Stage 2/3のScene Authoring凍結方針と両立しないための設計判断。

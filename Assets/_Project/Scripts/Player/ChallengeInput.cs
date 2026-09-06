@@ -30,7 +30,19 @@ namespace Domino.Player
 
             if (Keyboard.current[startChallengeKey].wasPressedThisFrame && GameFlowManager.Instance != null)
             {
-                GameFlowManager.Instance.RequestStartChallengeRpc();
+                // Step 14.3: the same key now also cancels a RUNNING Challenge back to
+                // BUILDING - which RPC to send is decided from this Client's own local read of
+                // CurrentPhase (a NetworkVariable, already synced to everyone); the Server
+                // re-validates the actual Phase independently in both RPCs regardless.
+                GamePhase phase = GameFlowManager.Instance.CurrentPhase;
+                if (phase == GamePhase.READY)
+                {
+                    GameFlowManager.Instance.RequestStartChallengeRpc();
+                }
+                else if (phase == GamePhase.RUNNING)
+                {
+                    GameFlowManager.Instance.RequestCancelChallengeRpc();
+                }
             }
         }
     }

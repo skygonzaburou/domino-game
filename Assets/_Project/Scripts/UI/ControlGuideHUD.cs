@@ -1,3 +1,4 @@
+using TMPro;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -63,6 +64,17 @@ namespace Domino.UI
         [SerializeField] private Color keycapNormalColor = new Color(0.18f, 0.18f, 0.18f, 0.95f);
         [SerializeField] private Color keycapPressedColor = new Color(0.2f, 0.55f, 0.9f, 1f);
 
+        // Step 14.3 (Section 9): the F key now does double duty (Start Challenge while READY,
+        // Cancel Run while RUNNING) - the same Row/Text is reused for both rather than adding a
+        // second Row, so no new Scene-placed GameObject is needed here (Stage 2/3's own copies
+        // of this Canvas are frozen this Step and must not be touched). The child Text is found
+        // at Runtime via GetComponentInChildren instead of a new serialized field for the same
+        // reason - nothing about the Scene's own serialized wiring needs to change.
+        private const string StartChallengeLabelText = "Start Challenge";
+        private const string CancelRunLabelText = "Cancel Run";
+        private TextMeshProUGUI _startChallengeLabel;
+        private bool _startChallengeLabelInitialized;
+
         private void Update()
         {
             GamePhase? phase = GameFlowManager.Instance != null ? GameFlowManager.Instance.CurrentPhase : (GamePhase?)null;
@@ -84,6 +96,11 @@ namespace Domino.UI
             // Normal Guide (Section 6/9/10): only what Current Code actually allows right now.
             bool canPlaceDomino = showNormalGuide && phase == GamePhase.BUILDING;
             bool canStartChallenge = showNormalGuide && phase == GamePhase.READY;
+            // Step 14.3: F now also cancels a RUNNING Challenge back to BUILDING - shares the
+            // same Row/keycap as Start Challenge (they can never both be true, READY and
+            // RUNNING being mutually exclusive Phases) rather than a second Row.
+            bool canCancelChallenge = showNormalGuide && phase == GamePhase.RUNNING;
+            bool canUseFKey = canStartChallenge || canCancelChallenge;
             bool canPause = showNormalGuide
                 && (phase == GamePhase.BUILDING || phase == GamePhase.READY || phase == GamePhase.RUNNING);
 
@@ -94,21 +111,30 @@ namespace Domino.UI
             SetActive(lookRow, showNormalGuide);
             SetActive(placeDominoRow, canPlaceDomino);
             SetActive(lockMarkerRow, canPlaceDomino);
-            SetActive(startChallengeRow, canStartChallenge);
+            SetActive(startChallengeRow, canUseFKey);
             SetActive(pauseRow, canPause);
+
+            if (canUseFKey)
+            {
+                EnsureStartChallengeLabel();
+                if (_startChallengeLabel != null)
+                {
+                    _startChallengeLabel.text = canCancelChallenge ? CancelRunLabelText : StartChallengeLabelText;
+                }
+            }
 
             // Placement Guide (Section 7/8): Movement Hints (W/S/Jump/Run/Look) never shown here.
             SetActive(rotateRow, showPlacementGuide);
             SetActive(placeRow, showPlacementGuide);
             SetActive(cancelRow, showPlacementGuide);
 
-            UpdatePressedStates(showNormalGuide, showPlacementGuide, canPlaceDomino, canStartChallenge, canPause);
+            UpdatePressedStates(showNormalGuide, showPlacementGuide, canPlaceDomino, canUseFKey, canPause);
         }
 
         // Step 11.1 (Section 9-13): every Key/Mouse Button actually shown gets a Pressed State,
         // not just Hold-style ones - a One-shot Key (E/F/Esc) simply reads as briefly Pressed for
         // whatever real Frames its physical key is down, with no Flash/delay machinery added.
-        private void UpdatePressedStates(bool normalGuide, bool placementGuide, bool canPlaceDomino, bool canStartChallenge, bool canPause)
+        private void UpdatePressedStates(bool normalGuide, bool placementGuide, bool canPlaceDomino, bool canUseFKey, bool canPause)
         {
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
@@ -123,7 +149,7 @@ namespace Domino.UI
                 SetPressed(keycapCtrl, keyboard.leftCtrlKey.isPressed);
                 SetPressed(keycapSpace, keyboard.spaceKey.isPressed);
                 if (canPlaceDomino) SetPressed(keycapE, keyboard.eKey.isPressed);
-                if (canStartChallenge) SetPressed(keycapF, keyboard.fKey.isPressed);
+                if (canUseFKey) SetPressed(keycapF, keyboard.fKey.isPressed);
                 if (canPause) SetPressed(keycapPauseEsc, keyboard.escapeKey.isPressed);
             }
             if (normalGuide && canPlaceDomino && mouse != null)
@@ -147,6 +173,13 @@ namespace Domino.UI
         {
             if (keycap == null) return;
             keycap.color = pressed ? keycapPressedColor : keycapNormalColor;
+        }
+
+        private void EnsureStartChallengeLabel()
+        {
+            if (_startChallengeLabelInitialized) return;
+            _startChallengeLabelInitialized = true;
+            if (startChallengeRow != null) _startChallengeLabel = startChallengeRow.GetComponentInChildren<TextMeshProUGUI>(true);
         }
 
         // Mirrors GameplayHUD.IsLocalPlayerPlacing() exactly (Section 19 - reads the same

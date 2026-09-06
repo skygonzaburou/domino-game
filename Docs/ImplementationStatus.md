@@ -1741,3 +1741,34 @@ Reflectionで`ThirdPersonCamera._yaw`を直接設定し、Camera位置をPlayer�
 ### Git
 - Step 14.1完了時点(`2eae265`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.3: Allow Cancelling a Running Challenge
+
+RUNNING中に`F`キーでChallengeをCancelし、BUILDINGへ戻れる機能を追加しました。詳細は[Docs/GameFlow.md](GameFlow.md)「9.8. RUNNING Cancel」、[Docs/ControlGuide.md](ControlGuide.md)「F Keyの二重の役割とLabel切替」を参照してください。
+
+### 実装
+- `GameFlowManager.cs`: `RequestCancelChallengeRpc()`(`RequestStartChallengeRpc`と同じAuthority Policy、`SendTo.Server`/`RpcInvokePermission.Everyone`)を追加。`CancelRunSequence()`は既存の`FailureResetSequence()`とほぼ同じ形(`DespawnFallenRegistered()`でFallenのみ削除、Standingは維持、既存の`ResetRunState()`でRoute Progressをリセット)だが、`failureDisplayDuration`のWaitを持たない(意図的なPlayer操作でありFAILED表示は不要なため)。Cancel後は`ReevaluateReady()`を即座に呼び、条件を満たしていれば自動的にREADYへ再昇格する(第8.5章の既存Ready判定Ruleをそのまま利用)
+- `ChallengeInput.cs`: F押下時、Local読み取りの`GameFlowManager.CurrentPhase`によりRPCを送り分け(READY→Start、RUNNING→Cancel)。Server側は両RPCとも独立にPhaseを再検証するため、Client側の判定を信用していない
+- `ControlGuideHUD.cs`: 既存の`startChallengeRow`をREADY/RUNNING両Phaseで共有し、`GetComponentInChildren<TextMeshProUGUI>()`でRuntimeに見つけた子TextのLabelを"Start Challenge"/"Cancel Run"へ切替。新しいRow GameObject/Serialized Fieldは追加していない(`SampleScene`/`StageScene_2`/`StageScene_3`が個別に持つScene Wiringへ手を加える必要がないようにするための設計判断 - Stage 2/3のScene Authoring凍結方針と両立させるため)
+- `ChallengeTimer.cs`: **無変更**。既存の`Update()`によるPhase監視(`IsActivePhase(BUILDING||READY)`の変化を検知して`ApplyActiveTransition()`)がRUNNING→BUILDINGの変化も自動的に処理するため、BUILD TIMEの一時停止・再開(リセットなし)は既存の仕組みだけで実現している
+
+### 動作確認済み(Single Player実機Play Mode)
+- BUILDING → READY → F(Start) → RUNNING → F(Cancel) → BUILDING → (条件を満たすため即座に)READY、を確認
+- BUILD TIME: RUNNING中は複数秒の実時間が経過しても同一値のまま固定されることを確認、Cancel後はゼロにリセットされず固定値から再開することを確認(Retryの`ResetForRetry()`はCancelから一切呼んでいない)
+- Standing Dominoは、Cancel後も同じ位置・同じTilt(0°)で維持されることを確認
+- Cancel後、再度F(Start)でRUNNINGへ再突入できることを確認(複数回の往復を確認)
+- Control Guideの表示Labelが、READY中"Start Challenge"→RUNNING中"Cancel Run"→Cancel後"Start Challenge"と正しく切り替わることを確認
+
+### 未確認事項
+- **Fallen Domino混在時のCancel**: RUNNING中に一部Dominoが倒れた状態でCancelした場合の「Fallenのみ削除・Standingは維持」という組み合わせ動作は、実機テストでDominoを意図的に倒す際にScript側のTorque付与が既存のWrong Route判定を誤って誘発してしまい、クリーンな確認ができませんでした。`DespawnFallenRegistered()`自体は第9章のFAILED Resetで既に使われている無変更のMethodであり、リスクは低いと判断していますが、開発者ご自身による確認をお願いしたい部分です
+- Online(Host+Client)でのAuthority確認は未実施です(`RequestStartChallengeRpc`と全く同じPolicyを再利用しているため、そちらで既に確認済みのAuthority挙動がそのまま当てはまると判断していますが、実機確認はしていません)
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 14.2完了時点(`e04203e`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

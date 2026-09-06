@@ -58,6 +58,10 @@ namespace Domino.GameFlow
         private float _timeSinceLastReadyPoll;
         private bool _failureSequenceRunning;
 
+        // Step 14.3: same re-entrancy guard shape as _failureSequenceRunning above, for the new
+        // RUNNING -> BUILDING Cancel path.
+        private bool _cancelSequenceRunning;
+
         // Step 10A: renamed from _isRetrying - now guards both the SUCCESS -> Retry path and
         // the new Pause -> Restart path, since both run the same shared reset coroutine.
         private bool _isResettingStage;
@@ -255,6 +259,52 @@ namespace Domino.GameFlow
         {
             ResetRunState();
             SetPhase(GamePhase.RUNNING);
+        }
+
+        // Step 14.3: same F key as RequestStartChallengeRpc above, same Authority policy
+        // (SendTo.Server, any connected Player may ask - not Host-only), just for the opposite
+        // direction (RUNNING -> BUILDING instead of READY -> RUNNING). Deliberately a separate
+        // RPC rather than folding into RequestStartChallengeRpc - the two only ever apply in
+        // mutually exclusive Phases, and keeping them separate avoids one method silently doing
+        // two different things depending on hidden state.
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        public void RequestCancelChallengeRpc(RpcParams rpcParams = default)
+        {
+            if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused) return;
+            if (_phase.Value != GamePhase.RUNNING) return;
+            if (_cancelSequenceRunning) return;
+
+            _cancelSequenceRunning = true;
+            StartCoroutine(CancelRunSequence());
+        }
+
+        // Section 4: this is not a full Retry/Restart - Standing Dominoes are left exactly
+        // where they are, only ones that already fell during the cancelled Run are cleaned up
+        // (mirrors FailureResetSequence's own Fallen-only cleanup below, minus its Display
+        // Duration wait - a deliberate Player Cancel has nothing to show/wait for). Route
+        // Progress resets via the same ResetRunState() a fresh Run itself uses. Build Time is
+        // not touched here at all - ChallengeTimer already resumes it for free the instant
+        // CurrentPhase leaves RUNNING for BUILDING (its own Update() polls IsActivePhase()).
+        private IEnumerator CancelRunSequence()
+        {
+            bool despawnComplete = false;
+            if (DominoCleanupManager.Instance != null)
+            {
+                DominoCleanupManager.Instance.DespawnFallenRegistered(() => despawnComplete = true);
+            }
+            else
+            {
+                despawnComplete = true;
+            }
+            yield return new WaitUntil(() => despawnComplete);
+
+            ResetRunState();
+            _cancelSequenceRunning = false;
+            SetPhase(GamePhase.BUILDING);
+
+            // Same reasoning as FailureResetSequence/FullStageResetSequence: check immediately
+            // rather than waiting for the next Enter/Exit event or poll tick.
+            ReevaluateReady();
         }
 
         private void ResetRunState()

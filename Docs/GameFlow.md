@@ -613,6 +613,87 @@ sequenceDiagram
 
 ---
 
+## 9.8. RUNNING Cancel(Step 14.3で追加)
+
+RUNNING中に`F`キーを押すと、Challengeを中断してBUILDINGへ戻れます。READYで`F`を押すと従来どおりChallengeを開始する(第7章)のと同じキーが、Phaseに応じて逆方向にも使えるようになりました。
+
+### Retry/Restartとの違い
+
+Cancelは、第9.6/9.7章のRetry/Restart(`FullStageResetSequence`、Standing/Fallen問わず全Domino削除・Player再配置・BUILD TIME完全リセット)とは**別物**です。
+
+| | Retry/Restart | Cancel(本章) |
+|---|---|---|
+| 呼べるPhase | SUCCESS / Paused中 | RUNNING中のみ |
+| Domino | Standing含め全削除 | **Fallenのみ削除、Standingは維持** |
+| Player位置 | Spawn Pointへ再配置 | 変更しない |
+| BUILD TIME | 完全リセット(次のFirst Dominoでゼロから) | **一時停止していた値から再開(リセットしない)** |
+| Route Progress | リセット | リセット(共通) |
+
+### Cancel Request
+
+```csharp
+[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+public void RequestCancelChallengeRpc(RpcParams rpcParams = default)
+{
+    if (GameplayPauseManager.Instance != null && GameplayPauseManager.Instance.IsPaused) return;
+    if (_phase.Value != GamePhase.RUNNING) return;
+    if (_cancelSequenceRunning) return;
+
+    _cancelSequenceRunning = true;
+    StartCoroutine(CancelRunSequence());
+}
+```
+
+第7章の`RequestStartChallengeRpc`と全く同じAuthority Policy(`SendTo.Server`、`RpcInvokePermission.Everyone` - Host限定ではなく誰でも要求可能)です。どちらのRPCを送るかは`ChallengeInput`(Client側)が自分のLocalな`GameFlowManager.CurrentPhase`(NetworkVariable、既に全Clientへ同期済み)を見て決めますが、Server側はどちらのRPCでも独立してPhaseを再検証するため、Client側の判定を信用していません。
+
+### Cancel処理の内容(`CancelRunSequence()`)
+
+```csharp
+private IEnumerator CancelRunSequence()
+{
+    bool despawnComplete = false;
+    if (DominoCleanupManager.Instance != null)
+        DominoCleanupManager.Instance.DespawnFallenRegistered(() => despawnComplete = true);
+    else
+        despawnComplete = true;
+    yield return new WaitUntil(() => despawnComplete);
+
+    ResetRunState();
+    _cancelSequenceRunning = false;
+    SetPhase(GamePhase.BUILDING);
+    ReevaluateReady();
+}
+```
+
+第9章のFAILED Reset(`FailureResetSequence`)とほぼ同じ形ですが、`failureDisplayDuration`のWaitがありません - Cancelは意図的なPlayer操作であり、「FAILED」表示や結果を見せる必要がないため、Fallen Dominoの削除完了を待った直後にBUILDINGへ直接移行します。`DespawnFallenRegistered()`(Fallenのみ削除、Standingは維持)は第9章のFAILED Resetと完全に同じMethodを再利用しており、新しいDespawn Logicは追加していません。
+
+### BUILD TIMEが自動的に再開する仕組み
+
+`ChallengeTimer`側には**一切変更を加えていません**。`ChallengeTimer.Update()`が毎Frame`GameFlowManager.Instance.CurrentPhase`を監視し、`IsActivePhase(phase)`(`BUILDING || READY`)の値が変化するたびに`ApplyActiveTransition()`を呼ぶ既存の仕組み(`ChallengeTimer.cs`、Step 8.5)が、Phaseの変化(RUNNING→BUILDING)を検知して自動的に処理します。
+
+- RUNNING突入時: 既存の仕組みにより、既にBUILD TIMEは一時停止(Accumulated値に畳み込み)済み
+- Cancel実行、Phase→BUILDING: `IsActivePhase(BUILDING)`が`true`に変わったことを`ChallengeTimer.Update()`が検知し、Accumulated値はリセットせず、その時点から新しいSegmentとして再開
+
+`ResetForRetry()`(Accumulated値をゼロに戻すMethod)は、Retry/Restartからのみ呼ばれ、Cancelからは一切呼びません。
+
+### READY即時再判定
+
+Cancel直後、`ReevaluateReady()`を即座に呼ぶため(第9章のFAILED Resetと同じパターン)、PlayerがStart Areaに留まったままStanding Dominoが残っていれば、BUILDINGを経由して即座にREADYへ戻ります(第8.5章の既存Ready判定Ruleをそのまま利用 - Cancel専用の特別なジャンプ処理は追加していません)。
+
+### 実機確認済み(Single Player実機Play Mode)
+
+- BUILDING → READY → F(Start) → RUNNING → F(Cancel) → BUILDING → (Standing Domino/Player共に条件を満たすため即座に)READY、を確認
+- BUILD TIME: RUNNING中は完全に固定(複数秒の実時間が経過しても同一値を確認)、Cancel後は固定値から再開(ゼロにリセットされないことを確認)
+- Standing Dominoは、Cancel後も同じ位置・同じTilt(0°)で維持されることを確認
+- Cancel後、再度F(Start)でRUNNINGへ再突入できることを確認
+- Control Guide(`ControlGuideHUD`、下記参照)のLabelが、READY中"Start Challenge"→RUNNING中"Cancel Run"→Cancel後"Start Challenge"と正しく切り替わることを確認
+
+### 未確認事項
+
+「RUNNING中に一部Dominoが倒れた状態でCancelした場合、Fallenのみ削除されStandingは維持される」という組み合わせ動作は、実機テストで意図的にDominoを倒す際に(Scriptによる強制的なTorque付与が、既存のWrong Route判定を誤って誘発してしまったため)クリーンな確認ができませんでした。`DespawnFallenRegistered()`自体は第9章のFAILED Resetで既に使われている無変更のMethodであり、リスクは低いと判断していますが、開発者ご自身による確認をお願いしたい部分です。
+
+---
+
 ## 10. 関連コンポーネントの一覧
 
 | ファイル | クラス | 継承元 | 役割 |
