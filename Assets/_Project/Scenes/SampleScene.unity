@@ -3872,6 +3872,51 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 5636314518991483368, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
   m_PrefabInstance: {fileID: 489630194}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &537864671
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 537864672}
+  - component: {fileID: 537864673}
+  m_Layer: 0
+  m_Name: OverviewCameraPoint_2
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &537864672
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 537864671}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0.45591116, y: -0.0026701395, z: 0.0013677182, w: 0.8900203}
+  m_LocalPosition: {x: -1.3042939, y: 17.037727, z: -17.782566}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1363584182}
+  m_LocalEulerAnglesHint: {x: 40, y: 90, z: 0}
+--- !u!114 &537864673
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 537864671}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10b4db7386de45842aae129161e4d4aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.CameraSystem.OverviewCameraPoint
+  fieldOfView: 65
 --- !u!1 &542758899
 GameObject:
   m_ObjectHideFlags: 0
@@ -8247,7 +8292,7 @@ GameObject:
   - component: {fileID: 1249267436}
   - component: {fileID: 1249267437}
   m_Layer: 0
-  m_Name: OverviewCameraPoint
+  m_Name: OverviewCameraPoint_1
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -8261,13 +8306,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1249267435}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.3469463, y: -0, z: -0, w: 0.93788505}
-  m_LocalPosition: {x: 1, y: 12, z: -14}
+  m_LocalRotation: {x: 0.24455805, y: -0.18053591, z: 0.0463996, w: 0.9515489}
+  m_LocalPosition: {x: 4.1487217, y: 4.0745144, z: -14.756552}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1363584182}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 40, y: 0, z: 0}
 --- !u!114 &1249267437
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8974,6 +9019,8 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1249267436}
+  - {fileID: 537864672}
+  - {fileID: 2091517812}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!4 &1374954658 stripped
@@ -11538,6 +11585,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Domino.GameFlow.CheckpointZone
   fallenAngleThreshold: 60
   preExistingTiltExclusionThreshold: 10
+  lateFallGraceDuration: 0.6
   checkpointIndex: 1
 --- !u!65 &1986347287
 BoxCollider:
@@ -12114,6 +12162,51 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 5636314518991483368, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
   m_PrefabInstance: {fileID: 2069102205}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &2091517811
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2091517812}
+  - component: {fileID: 2091517813}
+  m_Layer: 0
+  m_Name: OverviewCameraPoint_3
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2091517812
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2091517811}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0.009128178, y: 0.962493, z: -0.032639034, w: -0.2691815}
+  m_LocalPosition: {x: 3.6971712, y: 0.9944434, z: 13.956245}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1363584182}
+  m_LocalEulerAnglesHint: {x: 40, y: 0, z: 0}
+--- !u!114 &2091517813
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2091517811}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10b4db7386de45842aae129161e4d4aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.CameraSystem.OverviewCameraPoint
+  fieldOfView: 65
 --- !u!1001 &2114490252
 PrefabInstance:
   m_ObjectHideFlags: 0

@@ -4214,6 +4214,51 @@ MonoBehaviour:
   m_ChildScaleWidth: 0
   m_ChildScaleHeight: 0
   m_ReverseArrangement: 0
+--- !u!1 &419031782
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 419031783}
+  - component: {fileID: 419031784}
+  m_Layer: 0
+  m_Name: OverviewCameraPoint_02
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &419031783
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 419031782}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0.08220189, y: 0.9177296, z: -0.26887235, w: -0.28057617}
+  m_LocalPosition: {x: 5.069231, y: 8.522239, z: 0.40521255}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1363584182}
+  m_LocalEulerAnglesHint: {x: 40, y: 0, z: 0}
+--- !u!114 &419031784
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 419031782}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10b4db7386de45842aae129161e4d4aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.CameraSystem.OverviewCameraPoint
+  fieldOfView: 65
 --- !u!1001 &423516279
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -9913,7 +9958,7 @@ GameObject:
   - component: {fileID: 1249267436}
   - component: {fileID: 1249267437}
   m_Layer: 0
-  m_Name: OverviewCameraPoint
+  m_Name: OverviewCameraPoint_01
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -9927,8 +9972,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1249267435}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.3420201, y: 0, z: 0, w: 0.9396927}
-  m_LocalPosition: {x: 1, y: 15, z: -18}
+  m_LocalRotation: {x: 0.4214099, y: -0.001360327, z: 0.00063212216, w: 0.9068691}
+  m_LocalPosition: {x: 0.42868948, y: 23.330711, z: -19.763971}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -10775,6 +10820,9 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1249267436}
+  - {fileID: 419031783}
+  - {fileID: 1867651055}
+  - {fileID: 1550013793}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!4 &1374954658 stripped
@@ -11834,6 +11882,51 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1541548121}
   m_CullTransparentMesh: 1
+--- !u!1 &1550013792
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1550013793}
+  - component: {fileID: 1550013794}
+  m_Layer: 0
+  m_Name: OverviewCameraPoint_04
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1550013793
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1550013792}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0.1037345, y: -0.545441, z: 0.0682605, w: 0.8288992}
+  m_LocalPosition: {x: 9.7502775, y: 3.8120487, z: 7.863324}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1363584182}
+  m_LocalEulerAnglesHint: {x: 40, y: 0, z: 0}
+--- !u!114 &1550013794
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1550013792}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10b4db7386de45842aae129161e4d4aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.CameraSystem.OverviewCameraPoint
+  fieldOfView: 65
 --- !u!1 &1556682531
 GameObject:
   m_ObjectHideFlags: 0
@@ -13510,6 +13603,51 @@ Transform:
   - {fileID: 92729252}
   m_Father: {fileID: 1785275082}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1867651054
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1867651055}
+  - component: {fileID: 1867651056}
+  m_Layer: 0
+  m_Name: OverviewCameraPoint_03
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1867651055
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1867651054}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0.27233687, y: -0.27233592, z: 0.08067606, w: 0.9193243}
+  m_LocalPosition: {x: 7.478497, y: 11.247982, z: -3.3486292}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1363584182}
+  m_LocalEulerAnglesHint: {x: 40, y: 0, z: 0}
+--- !u!114 &1867651056
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1867651054}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10b4db7386de45842aae129161e4d4aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Domino.CameraSystem.OverviewCameraPoint
+  fieldOfView: 65
 --- !u!4 &1876010624 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 5636314518991483368, guid: f2337d0139367244098c031a5cf4dd4e, type: 3}
@@ -14459,6 +14597,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Domino.GameFlow.CheckpointZone
   fallenAngleThreshold: 60
   preExistingTiltExclusionThreshold: 10
+  lateFallGraceDuration: 0.6
   checkpointIndex: 1
 --- !u!65 &1986347287
 BoxCollider:
