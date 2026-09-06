@@ -11,6 +11,19 @@ namespace Domino.DominoSystem
         [SerializeField] private GameObject dominoPrefab;
         [SerializeField] private float maxPlacementDistance = 3f;
 
+        // Step 14.1 Root Cause: two Dominoes spawned overlapping produce a violent,
+        // uncontrolled physics separation - confirmed via Runtime by deliberately spawning an
+        // overlapping pair, which launched one of them over 10m straight through the floor
+        // (caught only by DominoCleanupManager's existing out-of-bounds safety net; see that
+        // file's own comment about this same "explosion" being observed in practice). Such an
+        // explosion is easily strong enough to fling a Domino across a Checkpoint Zone
+        // boundary while tilting it past the Fallen threshold mid-flight - which, correctly
+        // from that Zone's own perspective, reads as a genuine (but bogus) Wrong Route Fail.
+        // Sized to ~90% of the Domino's own BoxCollider half-extents (0.175, 0.5, 0.075) so
+        // legitimate close/touching chain placements (by design, almost touching) are never
+        // rejected - only a placement that would genuinely interpenetrate an existing Domino.
+        private static readonly Vector3 OverlapCheckHalfExtents = new Vector3(0.16f, 0.45f, 0.07f);
+
         private void Awake()
         {
             Instance = this;
@@ -50,6 +63,12 @@ namespace Domino.DominoSystem
                 return false;
             }
 
+            if (OverlapsExistingDomino(position, rotation))
+            {
+                Debug.LogWarning($"[DominoSpawner] Rejected placement from client {senderClientId}: overlaps an existing Domino.");
+                return false;
+            }
+
             NetworkObject spawned = NetworkObject.InstantiateAndSpawn(
                 dominoPrefab,
                 NetworkManager.Singleton,
@@ -69,6 +88,16 @@ namespace Domino.DominoSystem
             ChallengeTimer.Instance?.NotifyDominoPlaced();
 
             return true;
+        }
+
+        private static bool OverlapsExistingDomino(Vector3 position, Quaternion rotation)
+        {
+            Collider[] hits = Physics.OverlapBox(position, OverlapCheckHalfExtents, rotation, ~0, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                if (hits[i].CompareTag("Domino")) return true;
+            }
+            return false;
         }
 
         private static bool IsFinite(Vector3 v)

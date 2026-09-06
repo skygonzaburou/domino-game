@@ -1686,3 +1686,31 @@ Auto-Reconnect機能は実装していません(要件どおり)。`HostTryStart
 ### Git
 - Step 13.3完了時点(`4932ee3`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.1: Fix False Checkpoint Failure
+
+「Domino ChainがCheckpointへ到達した瞬間付近で、たまにFAILEDになる(毎回ではない)」という報告のRoot Cause調査と修正です。詳細は[Docs/DominoLifecycle.md](DominoLifecycle.md)「10. Physics Explosion自体の防止(Step 14.1)」を参照してください。
+
+### Root Cause(実機Runtime確認済み)
+`DominoCleanupManager.cs`(Step 8.6)に既に記録されていた「近接Spawnで重なったDomino同士をUnity Physicsが強制分離し、異常な初速を与える(Physics Explosion)」現象を、意図的な重なりSpawnにより実機で再現しました。全く同じ位置(または数cmしか離れていない位置)への連続Spawnで、片方のDominoが地面をすり抜けて10m以上自由落下することを確認済みです。このような異常な初速はCheckpoint Zoneの境界を飛び越えてDominoを飛ばしうるため、`GameFlowManager.OnZoneFallen()`の既存の順序判定(Step 7.5、無変更)から見て「まだ到達していないはずのZoneで突然倒れた」というWrong Route FAILEDを引き起こしうるメカニズムです。
+
+### Fix
+`DominoSpawner.TryPlaceDomino()`に、既存Distance/Finiteチェックと同じ位置へ重なり判定(`Physics.OverlapBox`、Domino自身のCollider半径の約90%)を追加し、既存Dominoと重なるSpawnそのものをServer側で拒否するようにしました。Checkpoint Collider・Wrong Route判定・Failure Settle Duration等は一切変更していません。
+
+### 動作確認済み(Single Player実機Play Mode)
+- 全く同じ位置への2連続Spawn: 2個目が`"overlaps an existing Domino"`で正しく拒否されることを確認(Fix前は両方成功し、片方が吹き飛んで消えることを確認済み)
+- 8cm離れた位置への2連続Spawn: 同様に拒否を確認
+- **回帰確認**: 0.2m間隔での連続Spawn(実際のChain構築で使われる密着に近い間隔)は7個全て成功 - 正常なChain構築を妨げないことを確認
+
+### 未確認事項
+Editor Play Mode Transitionの断続的な不安定化(Overlap判定を伴わない単純な操作でも発生、Explosion自体が原因ではないと判断)に阻まれ、「吹き飛んだDominoが実際にCheckpoint ZoneでWrong Route FAILEDを引き起こす」という最終段階のEnd-to-End Console Log確認はできませんでした。Physics Explosion発生の確認・Fixによる防止確認は完了していますが、そのFAILEDへの因果関係は既存コードのReviewから導いた合理的な結論であり、完全な実写確認ではありません。開発者に朝の再確認をお願いしています。
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 13.4完了時点(`f35d359`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

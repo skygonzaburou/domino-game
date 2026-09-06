@@ -223,4 +223,51 @@ if (tracked.Transform.position.y < outOfBoundsY)
 - **Object Poolingは未導入**: 現時点ではSpawn/Despawnのたびに実際にGameObjectを生成・破棄しています。将来的にDomino数が大幅に増える場合はPoolingの検討余地がありますが、Step 7では通常のNetwork Spawn/Despawn Lifecycleの動作確認を優先しています
 - ~~Clear Judgementの「まとめて追いつく」既知の課題~~: **Step 7.5で解消済みです**。`GameFlow.md`の第5章を参照してください
 - ~~SUCCESS後のリセットは未実装~~: **Step 8.5でRetryとして実装済みです**。第7.6章を参照してください
-- **Physics Explosion自体の防止は未着手**: Step 8.6で対策したのは「吹き飛んだDominoがFailure判定を汚染しない」ことであり、吹き飛び自体(近接Spawn時の異常な初速)を防ぐPlacement側のValidation追加は、Placement Systemの凍結方針により今回は着手していません。将来的にPlacement側で「既存Dominoと重ならない位置かどうか」の検証を追加する余地があります
+- ~~Physics Explosion自体の防止は未着手~~: **Step 14.1で対策済みです**。`DominoSpawner.TryPlaceDomino()`に重なり判定を追加しました。詳細は第10章を参照してください
+
+---
+
+## 10. Physics Explosion自体の防止(Step 14.1)
+
+### 発見の経緯
+
+「Domino ChainがCheckpointへ到達した瞬間付近で、たまにFAILEDになる」という報告を調査する過程で、実機Runtime検証により本章冒頭(第8章対策4)で説明した「Physics Explosion」現象を意図的に再現しました。全く同じ位置(または数cmしか離れていない位置)へDominoを連続でSpawnすると、Unity Physicsが重なったRigidbody同士を強制的に分離しようとして異常な初速を与え、片方のDominoが**地面をすり抜けて10m以上自由落下し、Out-of-Bounds安全網(第8章対策4)にDespawnされるまで消えない**ことを確認しました。
+
+このような異常な初速は、Checkpoint Zoneの境界を飛び越えてDominoを飛ばし、`GameFlowManager`の順序判定(`GameFlow.md`第5章「Wrong Order」参照)から見て「まだ到達していないはずのZoneで突然Domino が倒れた」という**Wrong Route判定によるFAILED**を引き起こしうる、実在するメカニズムです。この判定自体(順序チェック・Checkpoint Collider・Failure Settle Duration等)は一切変更していません - 変更したのは「そもそも異常な初速が発生する状況を作らせない」という一段階手前の予防です。
+
+### Fix: 重なり判定による事前拒否
+
+`DominoSpawner.TryPlaceDomino()`に、Spawn前チェックを追加しました。
+
+```csharp
+private static readonly Vector3 OverlapCheckHalfExtents = new Vector3(0.16f, 0.45f, 0.07f);
+
+private static bool OverlapsExistingDomino(Vector3 position, Quaternion rotation)
+{
+    Collider[] hits = Physics.OverlapBox(position, OverlapCheckHalfExtents, rotation, ~0, QueryTriggerInteraction.Ignore);
+    for (int i = 0; i < hits.Length; i++)
+    {
+        if (hits[i].CompareTag("Domino")) return true;
+    }
+    return false;
+}
+```
+
+`OverlapCheckHalfExtents`は、Dominoの実際のBoxCollider半径(0.175, 0.5, 0.075)の約90%です。既存のChain構築で日常的に使われる「密着に近い間隔」(実機確認: 0.2m間隔の連続配置は全て許可されることを確認済み)は誤って拒否せず、実際に**重なる**配置だけを`false`(拒否)にするための意図的なマージンです。既存の距離チェック(`maxPlacementDistance`)・非finite値チェックと同じ、Server側`TryPlaceDomino()`内での早期returnパターンに揃えています。
+
+### 実機確認
+
+- 全く同じ位置への2連続Spawn: 1個目は成功、2個目は`"overlaps an existing Domino"`で拒否されることを確認(Fix前は2個とも成功し、片方が10m以上吹き飛んで消えることを確認済み)
+- 8cmしか離れていない位置への2連続Spawn: 同様に2個目が拒否されることを確認
+- **回帰確認(重要)**: 0.2m間隔での連続Spawn(実際のChain構築で使われる密着に近い間隔)は7個全て成功することを確認 - 正常なChain構築を妨げないことを確認済み
+
+### 未確認事項
+
+Editor Play Mode自体の断続的な不安定化(Play Mode Transitionが`is_changing=true`のまま進まなくなる既知の環境不安定 - `ImplementationStatus.md`のStep 13.1エントリで既出の問題と同種)に複数回遭遇したため、「実際にExplosionで吹き飛んだDominoがCheckpoint ZoneをまたいでWrong Route FAILEDを引き起こす」という最後の1段階を、Console Log上で完全にEnd-to-Endで再現・確認することはできませんでした。この不安定化はOverlap判定を伴わない単純な操作でも発生したため、Explosion自体が原因ではないと判断していますが、完全なEnd-to-End再現は未達成です。以下は確認済みの事実から導いた、合理的だが完全な実写確認はしていない結論です。
+
+- **確認済み**: 重なりSpawnが異常な初速を伴う物理的な吹き飛びを引き起こすこと(Runtime実証済み)
+- **確認済み**: `GameFlowManager.OnZoneFallen()`の順序判定コード自体は、期待Indexと異なるZoneでのFallen Eventを無条件にWrong Route FAILEDとして扱うこと(Code Review済み、Step 7.5から無変更)
+- **確認済み**: Fix適用後、重なりSpawn自体が発生しなくなること(Runtime実証済み)
+- **未確認**: 上記2つを実際に繋げた「吹き飛んだDominoが具体的にどのCheckpointを誤発火させたか」というConsole Log上での直接観測
+
+もし朝になってもCheckpoint付近の予期しないFAILEDが再発する場合は、本Fixとは別の原因(例: 第5.5節のSettle Timeout関連、またはStage 2/3固有のGeometry)を疑う必要があります。
