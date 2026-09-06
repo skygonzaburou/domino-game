@@ -1803,3 +1803,41 @@ RUNNING Overview Cameraが複数のCamera Pointに対応し、`LMB`/`RMB`でCycl
 ### Git
 - Step 14.3完了時点(`c21c9a6`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.1.1: Fix Remaining False Checkpoint Failure
+
+Step 14.1のOverlap Spawn防止だけでは解決しなかった、「Checkpoint付近で予期しないFAILEDが再発する」不具合を、実機Live Runtime調査により特定・修正しました。詳細は[Docs/GameFlow.md](GameFlow.md)「5.6. Trigger退出後もFallen判定を継続するGrace Window」、[Docs/DominoLifecycle.md](DominoLifecycle.md)「11. Trigger退出後のFallen判定漏れ」を参照してください。
+
+### Root Cause(実機Runtime確認済み、User自身の再現Playから直接特定)
+
+`DominoFallenZone.CheckDomino()`は`OnTriggerEnter`/`OnTriggerStay`からしか呼ばれません。`PlayerDominoContact`(Step 11.2)のContact Assist Impulseで勢いよく倒れ始めたStart AreaのDominoが、`fallenAngleThreshold`(60°)へ到達する**前に**物理的にTrigger境界の外へ滑り出てしまうことを、実機Diagnostic Log(`OnTriggerExit (UNSATISFIED) ... tilt=42.8`)で直接確認しました。Chain自体はその後も完全に正常な順序で進行し、Checkpoint_01も正しく倒れていましたが、`_startTriggered`が永久にfalseのままだったため、GameFlowManagerから見て「まだ来ていないはずのZoneが発火した」Wrong Route FAILEDとして扱われていました。Step 14.1のOverlap Spawn防止とは完全に独立した、別のRace Conditionです。
+
+### Fix
+
+`DominoFallenZone.OnTriggerExit()`に、まだ`IsSatisfied`でも除外済みでもないDominoがTrigger外へ出た場合、`lateFallGraceDuration`(既定0.6秒)だけそのDomino単体の傾きを監視し続けるCoroutine(`WatchForLateFall`)を追加。Grace Window内に`fallenAngleThreshold`を超えたら通常の`OnZoneFallen()`(既存のWrong Route判定・順序チェックをそのまま通る)を呼びます。Wrong Route判定・Checkpoint Collider・Failure Settle Duration・Step 10.3.1/10.3.2の除外Ruleは一切変更していません。Step 14.1のOverlap Spawn防止(`DominoSpawner.cs`)は安全策として維持しています。
+
+### 動作確認済み
+
+- 実際のFailure発生時のConsole Logから、`OnTriggerExit (UNSATISFIED)`イベントがWrong Route FAILEDの直接の原因であったことをタイムスタンプの対応関係から確認
+- Checkpoint_01では5回の試行全てで`OnTriggerExit (UNSATISFIED)`が一度も発生しなかったことを確認(Start Area特有の問題であることを裏付け)
+- Fix適用後、Reflection経由でTrigger退出時点の状態(tilt<60)を人工的に再現し、その後60を超えた際にGrace Windowが正しくZoneを成立させることを確認
+- Fix適用後、開発者ご自身による複数回の再現テスト(元の再現条件を意図的に繰り返す試行を含む)でFAILEDが発生しないことを確認
+- BUILDING→READY→F→RUNNING→Start→Checkpoint 1という正常なRouteが、Fix適用後も引き続き正しく進行することを確認(回帰なし)
+
+### 未確認事項
+
+Race Conditionの性質上、Fix適用後に「以前失敗していた回数分だけ確実に成功する」という統計的証明はできていません。Console Log上で「Grace WindowがなければFAILEDしていたはずの実際のPlayシーンを、Fixありで確実に救った」という直接的な1:1対応は取れていませんが、Root Cause自体の直接確認とFixコードパスの独立検証の両方から、十分な確信度で対応済みと判断しています。
+
+### 環境上の問題(コードバグではない)
+
+調査中、Script変更によるDomain Reloadが、Play Mode中のNGO Sessionを破棄した後もUnityTransportのUDP Socket(Port 7799)を解放せず、以後のHost起動が全て失敗し続ける現象に複数回遭遇しました。Unity Editorの完全な再起動でのみ解消し、開発者に複数回再起動をお願いしました。これはUnity/NGOのDomain Reload制約に起因する既知のクラスの問題であり、本Fix自体のコードとは無関係です。
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 14.4完了時点(`21e8ec5`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

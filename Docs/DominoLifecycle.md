@@ -270,4 +270,50 @@ Editor Play Mode自体の断続的な不安定化(Play Mode Transitionが`is_cha
 - **確認済み**: Fix適用後、重なりSpawn自体が発生しなくなること(Runtime実証済み)
 - **未確認**: 上記2つを実際に繋げた「吹き飛んだDominoが具体的にどのCheckpointを誤発火させたか」というConsole Log上での直接観測
 
-もし朝になってもCheckpoint付近の予期しないFAILEDが再発する場合は、本Fixとは別の原因(例: 第5.5節のSettle Timeout関連、またはStage 2/3固有のGeometry)を疑う必要があります。
+**追記(Step 14.1.1)**: 実際にCheckpoint付近の予期しないFAILEDが再発しました。本Fix(Overlap Spawn防止)自体は正しく機能しており、Step 14.1で確認した「重なりSpawnによるPhysics Explosion」とは**別の、独立したRoot Cause**が存在していたことが判明しました。詳細は第11章を参照してください。
+
+---
+
+## 11. Trigger退出後のFallen判定漏れ(Step 14.1.1)
+
+Step 14.1のOverlap Spawn防止だけでは解決しなかった、「正しい順序でChainが進んでいるのにCheckpoint付近でFAILEDになる」不具合の、実際のRoot Causeです。GameFlow側の詳細(判定Logic自体の変更内容)は[Docs/GameFlow.md](GameFlow.md)「5.6. Trigger退出後もFallen判定を継続するGrace Window」を参照してください。本章は、この不具合が本当にPhysics Explosionとは別物であることが判明した調査過程に絞って記載します。
+
+### なぜStep 14.1のFixだけでは不十分だったか
+
+Step 14.1は「重なったDomino同士がUnity Physicsによって異常な初速で弾き飛ばされる」現象への対策でしたが、実際にUser自身の手元で再現し続けていたFAILEDは、Overlap Spawnが一切発生していない、普通に1個ずつ間隔を空けて配置されたChainでも発生していました。これは、Overlap Explosion以外にも「Domino ChainがStart Areaを正しく通過したように見えるのに、`_startTriggered`が立たない」別の経路が存在することを示唆していました。
+
+### 実機Diagnostic Logによる特定
+
+Temporary Diagnostic Log(`OnTriggerEnter`/`OnTriggerExit`/`FALLEN-TRIGGER`/`FAILURE REASON`)を追加し、実際にUser自身の手元(5回中2回FAILED)で再現していただいたところ、以下が判明しました。
+
+```text
+Zone='StartArea' OnTriggerExit (UNSATISFIED) Domino=... tilt=42.8 linVel=1.80
+```
+
+Start Areaで追跡していたDominoが、`fallenAngleThreshold`(60°)へ到達する**前に**物理的にTrigger境界の外へ滑り出ていました。`Player -> Domino Contact Assist`(`PlayerDominoContact.cs`、Step 11.2)が接触時に与えるImpulse(既定0.6、Domino原点よりやや高い位置への一撃)により、Start Areaの追跡対象Dominoが勢いよく倒れ始め、Start Area自体の奥行きが狭い(実測で境界まで0.35〜0.5m程度)ため、tilt threshold到達前にTriggerを出てしまうケースがあることを直接確認しました。`DominoFallenZone.CheckDomino()`は`OnTriggerEnter`/`OnTriggerStay`からしか呼ばれないため、一度Triggerを出たDominoがその後どれだけ傾いても、誰も見ていない状態になります。
+
+Chain自体はこの後も完全に正常に(Player Contact Assistの一撃を受けたDominoが、その後の並びへ正しく倒れ込んで)進行し、Checkpoint_01のDominoも正しい順序で倒れていましたが、`_startTriggered`が永久にfalseのままだったため、`GameFlowManager`から見ると「まだ来ていないはずのZoneが発火した」Wrong Route FAILEDとして扱われていました。
+
+### Physics Explosionとの切り分け
+
+この経路は、以下の点でStep 14.1のOverlap Explosionとは明確に異なります。
+
+| | Step 14.1(Overlap Explosion) | Step 14.1.1(Trigger退出漏れ) |
+|---|---|---|
+| 引き金 | 重なった位置への連続Spawn | 通常のPlacement + Player Contact Assist |
+| 異常な物理現象 | 異常な初速(Explosion) | 通常の速度でのTrigger境界通過タイミング |
+| 主に発生するZone | どのZoneでも起こりうる | Start Area(追跡Dominoが境界の近くにいることが多い) |
+| 対策 | 重なりSpawn自体を事前拒否 | Trigger退出後も短時間Fallen判定を継続 |
+
+両者は独立した問題であり、Step 14.1のOverlap Spawn防止は引き続き有効な安全策として維持しています。
+
+### 実機確認済み
+
+- 実際のFailure発生時のConsole Logから、`OnTriggerExit (UNSATISFIED)`イベント(tilt=42.8)がWrong Route FAILEDの直接の原因であったことをタイムスタンプの対応関係から確認
+- 同じCheckpoint_01については、5回の試行全てで`OnTriggerExit (UNSATISFIED)`が一度も発生しなかったことを確認 - Start Area特有の(境界が近い)問題であることを裏付け
+- Fix適用後、Reflection経由でTrigger退出時点の状態(tilt<60)を人工的に再現し、その後60を超えた際にGrace Windowが正しくZoneを成立させることを確認
+- Fix適用後、実際のUser操作による再現テスト(複数回、うち意図的に元の再現条件を繰り返す試行を含む)でFAILEDが発生しないことを確認
+
+### 未確認事項
+
+Race Conditionの性質上(Player ContactのTiming/Angleに依存し毎回発生するわけではない)、Fix適用後に「以前失敗していた回数分だけ確実に成功する」という統計的証明はできていません。Console Log上で「Grace WindowがなければFAILEDしていたはずの実際のPlayシーンを、Fixありで確実に救った」という直接的な1:1の対応は取れていませんが、(a) 同じRace Condition自体が実機で確認されなくなったこと、(b) Fixのコードパス自体をReflection経由で独立して検証できたこと、の両方から、十分な確信度で対応済みと判断しています。

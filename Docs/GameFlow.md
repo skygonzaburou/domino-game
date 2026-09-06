@@ -207,6 +207,76 @@ Step 6から維持している「RUNNING開始時点で既にZone内で倒れて
 
 ---
 
+## 5.6. Trigger退出後もFallen判定を継続するGrace Window(Step 14.1.1で追加)
+
+「正しい順序でChainが進んでいるように見えるのに、Checkpoint付近でFAILEDになる」という報告のRoot Cause対応です。詳細な調査過程は[Docs/DominoLifecycle.md](DominoLifecycle.md)「11. Trigger退出後のFallen判定漏れ(Step 14.1.1)」を参照してください。
+
+### Root Cause(実機Runtime確認済み)
+
+`DominoFallenZone.CheckDomino()`は`OnTriggerEnter`/`OnTriggerStay`からしか呼ばれません。Player Contact Assist(`PlayerDominoContact.cs`、Step 11.2)のImpulseで勢いよく倒れ始めたDominoが、`fallenAngleThreshold`(60°)を超える**前に**物理的にTriggerの外へ滑り出てしまうと、そのDominoが実際に倒れきった瞬間には誰も見ていない状態になります。特にStart Areaは追跡対象のDominoがTrigger境界のすぐ近くに置かれることが多く、この「回転しながらTriggerの外へ滑り出る」競合が起きやすいことが実機Diagnostic Logで確認されました。
+
+```text
+[Runtime確認ログ]
+Zone='StartArea' OnTriggerExit (UNSATISFIED) Domino=... tilt=42.8 linVel=1.80
+→ (このDominoは60°を超えるまで倒れ続けたが、StartAreaは既に「退出済み」としてしか記録していない)
+→ _startTriggered は永久にtrueにならない
+→ Chain Reaction自体はその後も正常に継続し、正しくCheckpoint_01を倒す
+→ しかしGameFlowManager.OnZoneFallen()から見ると、まだStartAreaが完了していないため
+  「まだ来ていないはずのZoneが発火した」= Wrong Route FAILED
+```
+
+Chain自体は完全に正常な順序で進行しているにも関わらず、「Startの完了判定だけが取りこぼされた」ことが原因で、その後の正当な進行がWrong Route扱いされてしまうという、Zone間の順序判定そのものとは独立したRace Conditionです。
+
+### Fix: 退出後の短いGrace Window
+
+```csharp
+protected virtual void OnTriggerExit(Collider other)
+{
+    if (!other.CompareTag("Domino")) return;
+    _dominoesInside.Remove(other.transform);
+
+    if (!IsSatisfied && !_excludedDominoes.Contains(other.transform)
+        && GameFlowManager.Instance != null && GameFlowManager.Instance.CurrentPhase == GamePhase.RUNNING
+        && !IsFallen(other.transform))
+    {
+        StartCoroutine(WatchForLateFall(other.transform));
+    }
+}
+
+private IEnumerator WatchForLateFall(Transform dominoTransform)
+{
+    float elapsed = 0f;
+    while (elapsed < lateFallGraceDuration) // 既定0.6秒
+    {
+        if (dominoTransform == null) yield break;
+        if (IsSatisfied) yield break;
+        if (_dominoesInside.Contains(dominoTransform)) yield break; // 再入場していれば通常のOnTriggerStayに任せる
+
+        if (IsFallen(dominoTransform))
+        {
+            IsSatisfied = true;
+            GameFlowManager.Instance.OnZoneFallen(this);
+            yield break;
+        }
+        elapsed += Time.deltaTime;
+        yield return null;
+    }
+}
+```
+
+まだ`IsSatisfied`でも除外済みでもないDominoがTriggerを退出した瞬間、`lateFallGraceDuration`(既定0.6秒)だけそのDomino単体の傾きを監視し続け、その間に`fallenAngleThreshold`を超えたら通常の`OnZoneFallen()`(Wrong Route判定含め、既存の順序チェックをそのまま通る)を呼びます。Grace Window内に倒れなかった場合(本当にただTriggerを横切っただけ、または途中で静止した場合)は何も起こらず、これまでと全く同じ挙動です。
+
+### 既存Ruleとの関係
+
+- **Wrong Route判定・Checkpoint Collider・Failure Settle Duration・Step 10.3.1/10.3.2の除外Rule、いずれも変更していません** - このFixは「Zoneが実際に満たされたと判断するタイミング」を一瞬だけ後ろに拡張しているだけで、判定Logic自体には一切手を加えていません
+- Grace Window中に`_dominoesInside`へ戻った(再びTriggerへ入り直した)場合は、通常の`OnTriggerStay`監視に任せてCoroutine側は自ら終了するため、二重にOnZoneFallenが呼ばれることはありません
+
+### 実機確認済み
+
+- 実際に発生した`OnTriggerExit (UNSATISFIED)`イベント(tilt=42.8、Runtime Diagnostic Logで確認)がWrong Route FAILEDの直接の引き金であったことを、タイムスタンプの対応関係から確認
+- Fix適用後、Reflection経由で同じRace Condition(Trigger退出時点でtilt<60、その後60を超える)を人工的に再現し、Grace Windowが正しくZoneを成立させることを確認
+- Fix適用後、実際のPlayer操作による再現テストで、複数回の試行でFAILEDが発生しないことを確認(ただし後述のとおり、Race Condition自体が毎回発生するわけではないため、完全な統計的証明ではありません)
+
 ## 6. Player Ready判定(Start Area)
 
 `StartAreaZone`だけは、Dominoに加えてPlayerの出入りも監視します。
