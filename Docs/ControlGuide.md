@@ -56,8 +56,14 @@ Step 11実装前に、Gameplayで実際に使用されているInputをコード
 | LMB | Domino確定配置 | `PlacementController.cs` |
 | Esc | Cancel Placement / Pause(Context依存) | `PlacementController.cs` / `GameplayHUD.cs` |
 | F | Start Challenge Request(READY) / Cancel Run Request(RUNNING、Step 14.3で追加) | `ChallengeInput.cs` |
+| LMB(RUNNING中) | 次のOverview Camera Pointへ切替(Step 14.4で追加) | `ThirdPersonCamera.cs` |
+| RMB(RUNNING中) | 前のOverview Camera Pointへ切替(Step 14.4で追加) | `ThirdPersonCamera.cs` |
 
 `Space`(Jump)は既存コードには実装済みだったが、今回のStepで初めて明示的に確認された。新規実装は行わず、既存機能としてControl Guideに含めている。
+
+### Overview Camera切替(LMB/RMB)にControl Guide表示行を追加していない理由(Step 14.4)
+
+機能自体(`ThirdPersonCamera`のCycling Input)は実装済みで、複数`OverviewCameraPoint`があるStageなら即座に動作しますが、`ControlGuideHUD`側に対応するGuide Rowはまだ追加していません。理由: 表示するとしても「複数Point時のみ表示」が自然ですが(Section 14.4-12は両方の方式を許容)、`SampleScene`/`StageScene_2`/`StageScene_3`のいずれも本Step時点でOverview Camera Pointを1つしか持たず(Stage 2/3への新規Point配置は今回のStepで意図的に見送り - `StageAuthoring.md`第9章参照)、新しいRow GameObjectを追加するには3 Scene全てへ同じSerialized Field Wiringを繰り返す必要があり、Stage 2/3のScene Authoring凍結方針と両立しません。開発者がStageへ複数Point目を配置された際に、必要であれば別途Guide Row追加をご検討ください(Step 14.3のCancel Runで採用した「既存RowのLabelをRuntime切替」パターンは、LMB/RMBという別のKeycapを新たに表示する必要があるため、そのままでは転用できません)。
 
 ## F Keyの二重の役割とLabel切替(Step 14.3)
 

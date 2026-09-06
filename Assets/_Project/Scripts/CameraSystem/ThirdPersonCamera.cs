@@ -42,6 +42,12 @@ namespace Domino.CameraSystem
         private float _normalFieldOfView;
         private float _overviewBlend;
 
+        // Step 14.4: which OverviewCameraPoint.Points entry is currently shown during RUNNING.
+        // Local-only (Section 13) - never a NetworkVariable, since this is each Client's own
+        // Viewing Preference, not something that needs to (or should) match across Clients.
+        private int _overviewCameraIndex;
+        private GamePhase? _previousObservedPhase;
+
         private void Awake()
         {
             Instance = this;
@@ -143,8 +149,46 @@ namespace Domino.CameraSystem
                 baseRotation = Quaternion.Slerp(normalRotation, placementRotation, _placementBlend);
             }
 
+            var overviewPoints = OverviewCameraPoint.Points;
+            GamePhase? currentPhase = GameFlowManager.Instance != null ? GameFlowManager.Instance.CurrentPhase : (GamePhase?)null;
+
+            // Step 14.4 (Section 7/8): a fresh Run (READY -> RUNNING, including re-entering
+            // RUNNING after a Step 14.3 Cancel) always starts back at the first Camera Point -
+            // detected as an edge (Phase becoming RUNNING when it was not RUNNING a moment ago),
+            // not evaluated every single RUNNING frame, so cycling during the Run is never
+            // fought back to 0.
+            if (currentPhase == GamePhase.RUNNING && _previousObservedPhase != GamePhase.RUNNING)
+            {
+                _overviewCameraIndex = 0;
+            }
+            _previousObservedPhase = currentPhase;
+
+            // Section 5/11: cycling input is live only during RUNNING - never during BUILDING
+            // (where the same LMB/RMB already mean Placement Confirm / Marker Lock,
+            // PlacementController's own Phase gate keeps the two from ever colliding) nor while
+            // Paused (Time.timeScale alone would not block a Mouse Button read here, but
+            // GameplayPauseManager freezes GameFlowManager's own Phase reporting scenario aside,
+            // simplest to just gate on Phase directly, matching every other RUNNING-only input
+            // in this project). Modulo-by-Count is inherently a no-op for a single-Point Stage
+            // (Section 4) - no separate "only if Count > 1" branch needed.
+            if (currentPhase == GamePhase.RUNNING && overviewPoints.Count > 0)
+            {
+                Mouse cycleMouse = Mouse.current;
+                if (cycleMouse != null)
+                {
+                    if (cycleMouse.leftButton.wasPressedThisFrame)
+                    {
+                        _overviewCameraIndex = (_overviewCameraIndex + 1) % overviewPoints.Count;
+                    }
+                    else if (cycleMouse.rightButton.wasPressedThisFrame)
+                    {
+                        _overviewCameraIndex = (_overviewCameraIndex - 1 + overviewPoints.Count) % overviewPoints.Count;
+                    }
+                }
+            }
+
             bool wantOverview = GameFlowManager.Instance != null && GameFlowManager.Instance.IsChallengeActive
-                && OverviewCameraPoint.Instance != null;
+                && overviewPoints.Count > 0;
             float overviewBlendTarget = wantOverview ? 1f : 0f;
             _overviewBlend = Mathf.MoveTowards(_overviewBlend, overviewBlendTarget, Time.deltaTime * overviewBlendSpeed);
 
@@ -152,12 +196,13 @@ namespace Domino.CameraSystem
             Quaternion finalRotation = baseRotation;
             float finalFieldOfView = _normalFieldOfView;
 
-            if (_overviewBlend > 0f && OverviewCameraPoint.Instance != null)
+            if (_overviewBlend > 0f && overviewPoints.Count > 0)
             {
-                Transform overview = OverviewCameraPoint.Instance.transform;
+                OverviewCameraPoint activePoint = overviewPoints[Mathf.Clamp(_overviewCameraIndex, 0, overviewPoints.Count - 1)];
+                Transform overview = activePoint.transform;
                 finalPosition = Vector3.Lerp(basePosition, overview.position, _overviewBlend);
                 finalRotation = Quaternion.Slerp(baseRotation, overview.rotation, _overviewBlend);
-                finalFieldOfView = Mathf.Lerp(_normalFieldOfView, OverviewCameraPoint.Instance.FieldOfView, _overviewBlend);
+                finalFieldOfView = Mathf.Lerp(_normalFieldOfView, activePoint.FieldOfView, _overviewBlend);
             }
 
             transform.SetPositionAndRotation(finalPosition, finalRotation);

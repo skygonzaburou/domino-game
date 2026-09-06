@@ -1772,3 +1772,34 @@ RUNNING中に`F`キーでChallengeをCancelし、BUILDINGへ戻れる機能を�
 ### Git
 - Step 14.2完了時点(`e04203e`)が本Step開始時点でPush済みであることを確認
 - 本Step: 下記Completion Report参照
+
+---
+
+## Step 14.4: Add Multi-Point Overview Camera Cycling
+
+RUNNING Overview Cameraが複数のCamera Pointに対応し、`LMB`/`RMB`でCycleできるようにしました。詳細は[Docs/StageAuthoring.md](StageAuthoring.md)「9. Overview Camera Pointの置き方」、[Docs/PlayerSystem.md](PlayerSystem.md)「Overview Camera」を参照してください。
+
+### 実装
+- `OverviewCameraPoint.cs`: 旧来の単一`Instance`Singletonを廃止し、`Points`(`IReadOnlyList<OverviewCameraPoint>`)という静的Listへ変更。各Instanceが`Awake()`で自身をListへ追加、`OnDestroy()`で削除し、Hierarchy Sibling Order順にSort。名前のHard-code/Parentの厳密チェックは行わず、Component型だけで安全に集約
+- `ThirdPersonCamera.cs`: Local-onlyな`_overviewCameraIndex`(NetworkVariableではない)を追加。RUNNING突入のEdge(Phaseが直前RUNNINGでなかった状態からRUNNINGになった瞬間)を検知して0へリセット(Step 14.3のCancel後再突入も自動的にカバー)。RUNNING中のみ`LMB`=Next/`RMB`=Previousで`(index±1+Count)%Count`によりWrap Around切替。Overview表示時は`overviewPoints[index]`のPosition/Rotation/FieldOfViewへブレンド(旧来の`OverviewCameraPoint.Instance`参照を置き換え)
+
+### 動作確認済み(Single Player実機Play Mode)
+- 既存の単一Point(`SampleScene`)で、`Points.Count=1`となり、RUNNING時のCamera位置がPointと完全一致することを確認(既存挙動の完全な後方互換性)
+- Play Mode中に一時的なCamera Point(Scene Fileには保存されない、Play Mode終了で自動的に消滅)を2つ追加し、`Points.Count=3`かつHierarchy Sibling Order通りに並ぶことを確認
+- `_overviewCameraIndex`を0/1/2それぞれに設定した状態で、Camera位置が対応するPointの位置と完全一致することを確認
+- Step 14.3のCancel → 再度Start Challengeで、`_overviewCameraIndex`が確実に0へリセットされることを確認
+- BUILDING Phaseでの既存Placement機能(E→Placement Mode突入)に regressionがないことを確認(`PlacementController.cs`は無変更)
+
+### 未確認事項
+- 実際のLMB/RMBクリックによるCycle(`Mouse.current.leftButton.wasPressedThisFrame`等の実入力経由)は、Input SystemへのHardware Event Simulationが本テスト環境では煩雑なため、Reflectionによる`_overviewCameraIndex`直接設定でのCamera描画確認に留めました。この入力読み取りパターン自体は本ファイル内の既存Mouse Look処理・`PlacementController.cs`のLMB/RMB処理と全く同一のIdiomです
+- Stage 2/StageScene_3への複数Camera Point配置・実際のマルチPoint環境でのE2E確認は、今回のStep方針(Stage 2/3 Scene Authoring凍結、複数Point配置は開発者ご自身が後日実施予定)により未実施です
+- Control Guideへの`[LMB] Next Camera`/`[RMB] Previous Camera`表示行は今回追加していません(`Docs/ControlGuide.md`に理由を記載 - Stage 2/3のScene Wiring凍結と両立させるため)。開発者が複数Point配置後、必要に応じてご検討ください
+- Online(Host+Client)での動作確認は未実施です(Local-onlyな挙動でNetworkVariableを一切使わないため、Single Playerでの確認で十分と判断していますが、実機確認はしていません)
+
+### Console
+- Error: 0件
+- Warning: 既存の無関係な警告のみ
+
+### Git
+- Step 14.3完了時点(`c21c9a6`)が本Step開始時点でPush済みであることを確認
+- 本Step: 下記Completion Report参照

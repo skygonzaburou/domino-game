@@ -417,9 +417,11 @@ if (confined)
 
 ### Overview Camera
 
-`ThirdPersonCamera`は、`IsChallengeActive`かつSceneに`OverviewCameraPoint`(Stage側で配置するTransform、詳細は`StageAuthoring.md`第9章)が存在する間、Position/Rotation/Field of Viewを`OverviewCameraPoint`の値へ`overviewBlendSpeed`(既定2、約0.5秒で遷移)を上限に滑らかにブレンドします。Placement Viewのブレンド(Step 4)と全く同じ`Mathf.MoveTowards`パターンで実装しており、Placement ViewとOverview Viewが同時に有効になることは(Placement自体がBUILDING専用のため)ゲームロジック上起こりません。
+`ThirdPersonCamera`は、`IsChallengeActive`かつSceneに`OverviewCameraPoint`(Stage側で配置するTransform、詳細は`StageAuthoring.md`第9章)が1つ以上存在する間、Position/Rotation/Field of Viewを現在選択中の`OverviewCameraPoint`の値へ`overviewBlendSpeed`(既定2、約0.5秒で遷移)を上限に滑らかにブレンドします。Placement Viewのブレンド(Step 4)と全く同じ`Mathf.MoveTowards`パターンで実装しており、Placement ViewとOverview Viewが同時に有効になることは(Placement自体がBUILDING専用のため)ゲームロジック上起こりません。
 
 Camera自体はNetwork同期しません。`GamePhase`は既にNetworkVariableとして全Clientへ配信されているため、各ClientがLocalで`GameFlowManager.Instance.IsChallengeActive`を見て、自分自身のCameraだけを独立に切り替えます。
+
+**複数Overview Camera Pointの切り替え(Step 14.4)**: `OverviewCameraPoint`は静的な`Points`(`IReadOnlyList<OverviewCameraPoint>`、Hierarchy Sibling Order順)としてScene内の全Instanceを保持するよう変更しました(旧来の単一`Instance`から変更 - Section 3参照)。`ThirdPersonCamera`は自身のLocal-onlyな`_overviewCameraIndex`(NetworkVariableではない、Client毎に独立)を持ち、RUNNING中のみ`LMB`=次のPoint/`RMB`=前のPoint(端でWrap Around)として切り替えられます。READY→RUNNINGへ突入するたび(Step 14.3のCancel後の再突入を含む)に`_overviewCameraIndex`は0へリセットされます。Point数が1つ(Step 14.4時点の全Stageがこの状態)の場合、Modulo演算が自然にNo-opとなるため、LMB/RMBを押しても何も起きず、既存の見た目・挙動を完全に維持します。
 
 ---
 

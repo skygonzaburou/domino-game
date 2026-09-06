@@ -148,15 +148,15 @@ Player(`Player.prefab`)は、Scene上に直接配置されているわけでは�
 
 ---
 
-## 9. Overview Camera Pointの置き方(Step 7.6で追加)
+## 9. Overview Camera Pointの置き方(Step 7.6で追加、Step 14.4で複数対応)
 
 RUNNING/SUCCESS/FAILED中、各Playerの画面は自動的に「Overview Camera」(Stage全体を見渡す固定視点)へ切り替わります。この視点は`OverviewCameraPoint`というGameObjectのTransformとFOV設定だけで決まり、**スクリプトを一切書き換える必要がありません**。
 
 1. Sceneに空のGameObjectを作成し、名前を`CameraPoints`とします(既存の`GameFlowZones`と同じ階層に置くと分かりやすいです)。
-2. `CameraPoints`の子として空のGameObjectを作成し、名前を`OverviewCameraPoint`とします。
-3. `OverviewCameraPoint`に`Domino.CameraSystem.OverviewCameraPoint`コンポーネントを追加します。
-4. `OverviewCameraPoint`のTransform(`Position`/`Rotation`)を、Start→Checkpoint→Goalのルート全体が画面に収まるような位置・向きに調整します。Sceneビューで実際に見え方を確認しながら調整するのが確実です。
-5. コンポーネントの`Field Of View`(既定60°)で画角を調整します。ルートが長い場合は数値を大きく、コンパクトな場合は小さくしてください。
+2. `CameraPoints`の子として空のGameObjectを作成し、名前を`OverviewCameraPoint`とします(2つ目以降を追加する場合は`OverviewCameraPoint_02`のように連番にすると分かりやすいです - 名前自体はCode上意味を持ちません、下記参照)。
+3. 各`OverviewCameraPoint`に`Domino.CameraSystem.OverviewCameraPoint`コンポーネントを追加します。
+4. 各`OverviewCameraPoint`のTransform(`Position`/`Rotation`)を、見せたい範囲が画面に収まるような位置・向きに調整します。Sceneビューで実際に見え方を確認しながら調整するのが確実です。
+5. 各コンポーネントの`Field Of View`(既定60°)で画角を調整します。ルートが長い場合は数値を大きく、コンパクトな場合は小さくしてください。
 
 ```
 Stage
@@ -166,10 +166,20 @@ Stage
 │   ├─ Checkpoint_02
 │   └─ GoalArea
 └─ CameraPoints
-    └─ OverviewCameraPoint  (Domino.CameraSystem.OverviewCameraPoint, Field Of View)
+    ├─ OverviewCameraPoint     (Domino.CameraSystem.OverviewCameraPoint, Field Of View)
+    ├─ OverviewCameraPoint_02  (同上、Step 14.4以降は複数配置可能)
+    └─ OverviewCameraPoint_03  (同上)
 ```
 
-`OverviewCameraPoint`はScene内に1つだけ配置してください(複数あると`Awake()`の実行順で最後に初期化されたものだけが`Instance`として使われ、Stage側の意図と食い違う可能性があります)。**Sceneに`OverviewCameraPoint`を1つも置かなかった場合、Overview Cameraへの切り替えは単純にスキップされ、Third Person Cameraのまま**になります(Errorにはなりません)。
+### 複数配置した場合の挙動(Step 14.4)
+
+`OverviewCameraPoint`は**複数配置できます**。`CameraPoints`配下の`Hierarchy Sibling Order`(Hierarchy上の並び順、ドラッグで並べ替え可能)がそのままCycle順序になります - Component自身は`CameraPoints`の直接の子である必要はなく、`OverviewCameraPoint`Componentさえ付いていれば、Scene内のどこにあっても自動的に集められます(名前のHard-codeやParentの厳密なチェックはしていません)。
+
+RUNNING中、Player(Local Client)は`LMB`で次のPoint、`RMB`で前のPointへCycleできます(端まで行くと逆側へWrap Aroundします)。これは各Clientが自分の画面でだけ独立に選べるLocalな見た目の好みであり、Network同期は一切しません(HostがPoint 2を見ていても、ClientはPoint 1のままで構いません)。新しいChallengeが始まる(READY→RUNNINGへ突入する)たびに、最初のPoint(Sibling Order最小)へ自動的に戻ります。
+
+**1つしか配置しなかった場合(Step 14.4以前と同じ)は、LMB/RMBを押しても何も起こらず安全にNo-opです(Errorにはなりません)。** 既存のStage(SampleScene/Stage 2/Stage 3、いずれも1つのみ配置)は、この変更前と全く同じ見た目・挙動のまま動作します。
+
+**Sceneに`OverviewCameraPoint`を1つも置かなかった場合、Overview Cameraへの切り替えは単純にスキップされ、Third Person Cameraのまま**になります(Errorにはなりません、Step 7.6から変更なし)。
 
 ### RUNNING中のPlayer移動可能範囲(Start Area Constraint)について
 
